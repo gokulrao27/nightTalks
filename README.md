@@ -1,6 +1,6 @@
 # NightTalks
 
-A production-ready Vite + TypeScript prototype for the NightCall mobile experience.
+A production-ready Vite + TypeScript prototype for the NightCall mobile experience, including splash, onboarding, safety confirmations, timezone setup, open/closed home states, call flow, post-call save, and The Wall.
 
 ## Available scripts
 
