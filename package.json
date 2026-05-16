@@ -1,0 +1,16 @@
+{
+  "name": "nighttalks",
+  "version": "1.0.0",
+  "description": "Production-ready NightCall prototype UI",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 0.0.0.0",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview --host 0.0.0.0",
+    "check": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "typescript": "^5.8.3",
+    "vite": "^6.3.5"
+  }
+}
