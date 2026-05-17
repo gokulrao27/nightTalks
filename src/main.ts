@@ -1,4 +1,17 @@
+import * as Sentry from '@sentry/browser';
+import '@fontsource/dm-serif-display/400.css';
+import '@fontsource/dm-serif-display/400-italic.css';
+import '@fontsource/dm-sans/300.css';
+import '@fontsource/dm-sans/400.css';
+import '@fontsource/dm-sans/500.css';
 import './styles.css';
+
+Sentry.init({
+  dsn: import.meta.env.VITE_SENTRY_DSN,
+  environment: import.meta.env.MODE,
+  enabled: import.meta.env.PROD,
+  tracesSampleRate: 0.1,
+});
 
 type ScreenId =
   | 'splash'
@@ -10,9 +23,12 @@ type ScreenId =
   | 'calling'
   | 'incall'
   | 'postcall'
-  | 'wall';
+  | 'wall'
+  | 'history'
+  | 'me'
+  | 'privacy';
 
-type NavTarget = 'tonight' | 'wall';
+type NavTarget = 'tonight' | 'wall' | 'history' | 'me';
 type ConfirmationKey = 'age' | 'privacy' | 'terms';
 type IconName =
   | 'wifi'
@@ -35,15 +51,23 @@ type IconName =
   | 'snowflake'
   | 'sun'
   | 'chevronDown'
+  | 'chevronRight'
   | 'clock'
   | 'userCheck'
   | 'shieldOff'
-  | 'fileText';
+  | 'fileText'
+  | 'trash'
+  | 'bell'
+  | 'lock'
+  | 'edit';
 
-type WallPost = {
-  quote: string;
-  region: string;
-  age: string;
+type WallPost = { quote: string; region: string; age: string };
+
+type SavedCall = {
+  id: string;
+  startedAt: number;
+  durationSecs: number;
+  word: string | null;
 };
 
 type OnboardingState = {
@@ -58,9 +82,12 @@ type AppState = {
   activeScreen: ScreenId;
   onboarding: OnboardingState;
   savedWords: string[];
+  savedCalls: SavedCall[];
   calls: number;
   passesLeft: number;
   wallCount: number;
+  tier: 'free' | 'premium';
+  notificationsEnabled: boolean;
 };
 
 const ICON_PATHS: Record<IconName, string> = {
@@ -84,10 +111,15 @@ const ICON_PATHS: Record<IconName, string> = {
   snowflake: '<path d="M10 4l2 2l2 -2"/><path d="M10 20l2 -2l2 2"/><path d="M4 10l2 2l-2 2"/><path d="M20 10l-2 2l2 2"/><path d="M12 6v12"/><path d="M6 12h12"/><path d="M7.8 7.8l8.4 8.4"/><path d="M16.2 7.8l-8.4 8.4"/>',
   sun: '<path d="M12 12m-4 0a4 4 0 1 0 8 0a4 4 0 1 0 -8 0"/><path d="M3 12h1"/><path d="M20 12h1"/><path d="M12 3v1"/><path d="M12 20v1"/><path d="M5.6 5.6l.7 .7"/><path d="M17.7 17.7l.7 .7"/><path d="M18.4 5.6l-.7 .7"/><path d="M6.3 17.7l-.7 .7"/>',
   chevronDown: '<path d="M6 9l6 6l6 -6"/>',
+  chevronRight: '<path d="M9 6l6 6l-6 6"/>',
   clock: '<path d="M12 12m-9 0a9 9 0 1 0 18 0a9 9 0 1 0 -18 0"/><path d="M12 7v5l3 3"/>',
   userCheck: '<path d="M8 7a4 4 0 1 0 8 0a4 4 0 0 0 -8 0"/><path d="M6 21v-2a4 4 0 0 1 4 -4h3"/><path d="M15 19l2 2l4 -4"/>',
   shieldOff: '<path d="M12 3l7 4v5c0 2 -1 4 -2.7 5.7"/><path d="M14 20a11 11 0 0 1 -9 -10v-3l3.8 -2.2"/><path d="M3 3l18 18"/>',
   fileText: '<path d="M14 3v4a1 1 0 0 0 1 1h4"/><path d="M17 21h-10a2 2 0 0 1 -2 -2v-14a2 2 0 0 1 2 -2h7l5 5v11a2 2 0 0 1 -2 2z"/><path d="M9 9h1"/><path d="M9 13h6"/><path d="M9 17h6"/>',
+  trash: '<path d="M4 7h16"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M5 7l1 12a2 2 0 0 0 2 2h8a2 2 0 0 0 2 -2l1 -12"/><path d="M9 7v-3h6v3"/>',
+  bell: '<path d="M10 5a2 2 0 1 1 4 0a7 7 0 0 1 4 6v3a4 4 0 0 0 2 3h-16a4 4 0 0 0 2 -3v-3a7 7 0 0 1 4 -6"/><path d="M9 17v1a3 3 0 0 0 6 0v-1"/>',
+  lock: '<path d="M12 13a1 1 0 1 0 2 0a1 1 0 0 0 -2 0"/><path d="M8 11v-4a4 4 0 0 1 8 0v4"/><rect x="5" y="11" width="14" height="10" rx="2"/>',
+  edit: '<path d="M7 7h-1a2 2 0 0 0 -2 2v9a2 2 0 0 0 2 2h9a2 2 0 0 0 2 -2v-1"/><path d="M20.385 6.585a2.1 2.1 0 0 0 -2.97 -2.97l-8.415 8.385v3h3l8.385 -8.415z"/><path d="M16 5l3 3"/>',
 };
 
 const AVATARS: IconName[] = ['moon', 'star', 'cloud', 'flame', 'droplet', 'leaf', 'eye', 'wind', 'snowflake', 'sun'];
@@ -100,78 +132,20 @@ const LINE_CLOSE_HOUR = 2;
 const LINE_CLOSE_MINUTE = 50;
 
 const WALL_POSTS: WallPost[] = [
-  {
-    quote:
-      "I told a stranger I loved someone I've never admitted loving. Saying it out loud to nobody made it more real than anything.",
-    region: 'Brazil',
-    age: '2h ago',
-  },
-  {
-    quote: "My word was 'lighter'. I didn't expect to mean it.",
-    region: 'the UK',
-    age: '4h ago',
-  },
-  {
-    quote:
-      "They said 'you're the first person I've told.' I'll carry that forever even though I'll never know their name.",
-    region: 'Canada',
-    age: '6h ago',
-  },
-  {
-    quote:
-      "I hung up after 3 minutes because I started crying. I don't know why I'm posting this. I guess I just want someone to know it happened.",
-    region: 'India',
-    age: '9h ago',
-  },
-  {
-    quote: "Asked them what they'd do if they weren't afraid. They went silent for 45 seconds. Then said 'go home.'",
-    region: 'Germany',
-    age: '11h ago',
-  },
+  { quote: "I told a stranger I loved someone I've never admitted loving. Saying it out loud to nobody made it more real than anything.", region: 'Brazil', age: '2h ago' },
+  { quote: "My word was 'lighter'. I didn't expect to mean it.", region: 'the UK', age: '4h ago' },
+  { quote: "They said 'you're the first person I've told.' I'll carry that forever even though I'll never know their name.", region: 'Canada', age: '6h ago' },
+  { quote: "I hung up after 3 minutes because I started crying. I don't know why I'm posting this. I guess I just want someone to know it happened.", region: 'India', age: '9h ago' },
+  { quote: "Asked them what they'd do if they weren't afraid. They went silent for 45 seconds. Then said 'go home.'", region: 'Germany', age: '11h ago' },
 ];
 
 const TIMEZONES = [
   { group: 'India', zones: [{ value: 'Asia/Kolkata', label: 'India — IST (UTC +5:30)' }] },
-  {
-    group: 'US & Canada',
-    zones: [
-      { value: 'America/New_York', label: 'US Eastern — ET (UTC -5)' },
-      { value: 'America/Chicago', label: 'US Central — CT (UTC -6)' },
-      { value: 'America/Denver', label: 'US Mountain — MT (UTC -7)' },
-      { value: 'America/Los_Angeles', label: 'US Pacific — PT (UTC -8)' },
-    ],
-  },
-  {
-    group: 'Europe',
-    zones: [
-      { value: 'Europe/London', label: 'UK — GMT (UTC 0)' },
-      { value: 'Europe/Paris', label: 'Central Europe — CET (UTC +1)' },
-      { value: 'Europe/Moscow', label: 'Russia — MSK (UTC +3)' },
-    ],
-  },
-  {
-    group: 'Asia',
-    zones: [
-      { value: 'Asia/Dubai', label: 'UAE — GST (UTC +4)' },
-      { value: 'Asia/Singapore', label: 'Singapore — SGT (UTC +8)' },
-      { value: 'Asia/Tokyo', label: 'Japan — JST (UTC +9)' },
-      { value: 'Asia/Seoul', label: 'Korea — KST (UTC +9)' },
-    ],
-  },
-  {
-    group: 'Australia & Pacific',
-    zones: [
-      { value: 'Australia/Sydney', label: 'Sydney — AEST (UTC +10)' },
-      { value: 'Pacific/Auckland', label: 'New Zealand — NZST (UTC +12)' },
-    ],
-  },
-  {
-    group: 'Latin America',
-    zones: [
-      { value: 'America/Sao_Paulo', label: 'Brazil — BRT (UTC -3)' },
-      { value: 'America/Mexico_City', label: 'Mexico — CST (UTC -6)' },
-    ],
-  },
+  { group: 'US & Canada', zones: [{ value: 'America/New_York', label: 'US Eastern — ET (UTC -5)' }, { value: 'America/Chicago', label: 'US Central — CT (UTC -6)' }, { value: 'America/Denver', label: 'US Mountain — MT (UTC -7)' }, { value: 'America/Los_Angeles', label: 'US Pacific — PT (UTC -8)' }] },
+  { group: 'Europe', zones: [{ value: 'Europe/London', label: 'UK — GMT (UTC 0)' }, { value: 'Europe/Paris', label: 'Central Europe — CET (UTC +1)' }, { value: 'Europe/Moscow', label: 'Russia — MSK (UTC +3)' }] },
+  { group: 'Asia', zones: [{ value: 'Asia/Dubai', label: 'UAE — GST (UTC +4)' }, { value: 'Asia/Singapore', label: 'Singapore — SGT (UTC +8)' }, { value: 'Asia/Tokyo', label: 'Japan — JST (UTC +9)' }, { value: 'Asia/Seoul', label: 'Korea — KST (UTC +9)' }] },
+  { group: 'Australia & Pacific', zones: [{ value: 'Australia/Sydney', label: 'Sydney — AEST (UTC +10)' }, { value: 'Pacific/Auckland', label: 'New Zealand — NZST (UTC +12)' }] },
+  { group: 'Latin America', zones: [{ value: 'America/Sao_Paulo', label: 'Brazil — BRT (UTC -3)' }, { value: 'America/Mexico_City', label: 'Mexico — CST (UTC -6)' }] },
 ];
 
 function icon(name: IconName, className = ''): string {
@@ -185,40 +159,47 @@ function defaultOnboarding(): OnboardingState {
     avatar: 'moon',
     alias: '',
     timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'Asia/Kolkata',
-    confirmations: {
-      age: false,
-      privacy: false,
-      terms: false,
-    },
+    confirmations: { age: false, privacy: false, terms: false },
   };
 }
 
-function formatTime(date: Date): { clock: string; status: string } {
-  const hours = date.getHours();
-  const minutes = String(date.getMinutes()).padStart(2, '0');
-  const period = hours >= 12 ? 'PM' : 'AM';
-  const hour12 = hours % 12 || 12;
-  return { clock: `${hour12}:${minutes}`, status: `${hour12}:${minutes} ${period}` };
+function getTimePartsInZone(timezone: string): { h: number; m: number; s: number } {
+  try {
+    const parts = new Intl.DateTimeFormat('en-US', {
+      timeZone: timezone,
+      hour: 'numeric',
+      minute: 'numeric',
+      second: 'numeric',
+      hour12: false,
+    }).formatToParts(new Date());
+    let h = parseInt(parts.find((p) => p.type === 'hour')!.value);
+    if (h === 24) h = 0;
+    const m = parseInt(parts.find((p) => p.type === 'minute')!.value);
+    const s = parseInt(parts.find((p) => p.type === 'second')!.value);
+    return { h, m, s };
+  } catch {
+    const now = new Date();
+    return { h: now.getHours(), m: now.getMinutes(), s: now.getSeconds() };
+  }
 }
 
-function isLineOpen(date = new Date()): boolean {
-  const minutesFromMidnight = date.getHours() * 60 + date.getMinutes();
-  const opensAt = LINE_OPEN_HOUR * 60 + LINE_OPEN_MINUTE;
-  const closesAt = LINE_CLOSE_HOUR * 60 + LINE_CLOSE_MINUTE;
-  return minutesFromMidnight >= opensAt && minutesFromMidnight < closesAt;
+function isLineOpen(timezone: string): boolean {
+  const { h, m } = getTimePartsInZone(timezone || 'Asia/Kolkata');
+  return h === LINE_OPEN_HOUR && m < LINE_CLOSE_MINUTE;
 }
 
-function nextOpenDate(now = new Date()): Date {
-  const next = new Date(now);
-  next.setHours(LINE_OPEN_HOUR, LINE_OPEN_MINUTE, 0, 0);
-  if (now.getTime() >= next.getTime()) next.setDate(next.getDate() + 1);
-  return next;
+function getSecondsUntilOpen(timezone: string): number {
+  const { h, m, s } = getTimePartsInZone(timezone || 'Asia/Kolkata');
+  const totalSecsNow = h * 3600 + m * 60 + s;
+  const target = LINE_OPEN_HOUR * 3600 + LINE_OPEN_MINUTE * 60;
+  return totalSecsNow < target ? target - totalSecsNow : 86400 - totalSecsNow + target;
 }
 
-function closeDate(now = new Date()): Date {
-  const close = new Date(now);
-  close.setHours(LINE_CLOSE_HOUR, LINE_CLOSE_MINUTE, 0, 0);
-  return close;
+function getSecondsUntilClose(timezone: string): number {
+  const { h, m, s } = getTimePartsInZone(timezone || 'Asia/Kolkata');
+  const totalSecsNow = h * 3600 + m * 60 + s;
+  const closeAt = LINE_CLOSE_HOUR * 3600 + LINE_CLOSE_MINUTE * 60;
+  return Math.max(0, closeAt - totalSecsNow);
 }
 
 function formatDuration(milliseconds: number): string {
@@ -229,16 +210,30 @@ function formatDuration(milliseconds: number): string {
   return `${hours}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
 }
 
+function haptic(pattern: number | number[]): void {
+  if ('vibrate' in navigator) navigator.vibrate(pattern);
+}
+
+const SEED_CALLS: SavedCall[] = [
+  { id: 'seed-1', startedAt: Date.now() - 86_400_000, durationSecs: 412, word: 'lighter' },
+  { id: 'seed-2', startedAt: Date.now() - 172_800_000, durationSecs: 588, word: 'enough' },
+  { id: 'seed-3', startedAt: Date.now() - 259_200_000, durationSecs: 600, word: null },
+];
+
 class NightCallApp {
   private readonly root: HTMLElement;
   private state: AppState;
   private callRemainingSeconds = INITIAL_REMAINING_SECONDS;
+  private callStartedAt = 0;
   private timerId: number | undefined;
   private clockTimerId: number | undefined;
   private toastTimerId: number | undefined;
   private splashTimerId: number | undefined;
 
   constructor(root: HTMLElement) {
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('/sw.js').catch(console.error);
+    }
     this.root = root;
     this.state = this.loadState();
     this.render();
@@ -254,10 +249,13 @@ class NightCallApp {
     const defaultState: AppState = {
       activeScreen: 'splash',
       onboarding: defaultOnboarding(),
-      savedWords: [],
+      savedWords: ['lighter', 'enough', 'free', 'present', 'seen'],
+      savedCalls: SEED_CALLS,
       calls: 7,
       passesLeft: 2,
       wallCount: 43,
+      tier: 'free',
+      notificationsEnabled: false,
     };
 
     try {
@@ -276,7 +274,10 @@ class NightCallApp {
             ...parsed.onboarding?.confirmations,
           },
         },
-        savedWords: Array.isArray(parsed.savedWords) ? parsed.savedWords.slice(0, 25) : [],
+        savedWords: Array.isArray(parsed.savedWords) ? parsed.savedWords.slice(0, 25) : defaultState.savedWords,
+        savedCalls: Array.isArray(parsed.savedCalls) ? parsed.savedCalls.slice(0, 50) : defaultState.savedCalls,
+        tier: parsed.tier ?? 'free',
+        notificationsEnabled: parsed.notificationsEnabled ?? false,
       };
     } catch {
       return defaultState;
@@ -289,9 +290,12 @@ class NightCallApp {
       JSON.stringify({
         onboarding: this.state.onboarding,
         savedWords: this.state.savedWords,
+        savedCalls: this.state.savedCalls,
         calls: this.state.calls,
         passesLeft: this.state.passesLeft,
         wallCount: this.state.wallCount,
+        tier: this.state.tier,
+        notificationsEnabled: this.state.notificationsEnabled,
       }),
     );
   }
@@ -301,6 +305,7 @@ class NightCallApp {
       <section class="wrap">
         <div class="phone" data-phone>
           <div class="toast" data-toast role="status" aria-live="polite">Connecting...</div>
+          <div data-countdown-announce aria-live="polite" aria-atomic="true" style="position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0)"></div>
           ${this.splashTemplate()}
           ${this.onboardingWelcomeTemplate()}
           ${this.onboardingSetupTemplate()}
@@ -311,6 +316,9 @@ class NightCallApp {
           ${this.inCallTemplate()}
           ${this.postCallTemplate()}
           ${this.wallTemplate()}
+          ${this.historyTemplate()}
+          ${this.meTemplate()}
+          ${this.privacyTemplate()}
         </div>
       </section>
     `;
@@ -322,10 +330,7 @@ class NightCallApp {
     return `
       <div class="sbar">
         <span class="sbar-time" data-live-clock></span>
-        <div class="sbar-icons" aria-hidden="true">
-          ${icon('wifi')}
-          ${icon('battery')}
-        </div>
+        <div class="sbar-icons" aria-hidden="true">${icon('wifi')}${icon('battery')}</div>
       </div>
     `;
   }
@@ -333,9 +338,7 @@ class NightCallApp {
   private stepsTemplate(step: 1 | 2 | 3): string {
     return `
       <div class="steps" aria-label="Onboarding step ${step} of 3">
-        ${[1, 2, 3]
-          .map((item) => `<div class="step ${item === step ? 'active' : ''}" aria-hidden="true"></div>`)
-          .join('')}
+        ${[1, 2, 3].map((i) => `<div class="step ${i === step ? 'active' : ''}" aria-hidden="true"></div>`).join('')}
       </div>
     `;
   }
@@ -345,7 +348,7 @@ class NightCallApp {
       <section class="screen active" data-screen="splash" aria-labelledby="splash-title">
         <div class="splash-bg">
           <div class="splash-ring">${icon('moon', 'splash-icon')}</div>
-          <h1 class="splash-logo" id="splash-title">Night<em>Call</em></h1>
+          <h1 class="splash-logo" id="splash-title" data-autofocus tabindex="-1">Night<em>Call</em></h1>
           <p class="tagline">10 minutes. One stranger. Then it's over.</p>
           <p class="splash-loading">Loading…</p>
         </div>
@@ -359,15 +362,15 @@ class NightCallApp {
         ${this.statusBarTemplate()}
         ${this.stepsTemplate(1)}
         <div class="ob-scroll">
-          <h2 class="ob-title ob-title--large" id="welcome-title">The line opens<br />at midnight.</h2>
+          <h2 class="ob-title ob-title--large" id="welcome-title" data-autofocus tabindex="-1">The line opens<br />at midnight.</h2>
           <p class="ob-sub">Every night, for exactly 50 minutes — 2:00 to 2:50 AM — a line opens. You get 10 minutes with a stranger. Then it's gone. So are they.</p>
           <article class="quote-card">
             <div class="quote-label">From The Wall, last night</div>
-            <p class="quote-copy">“She laughed when I said I was scared of being forgotten. Then said she was too.”</p>
+            <p class="quote-copy">"She laughed when I said I was scared of being forgotten. Then said she was too."</p>
             <div class="quote-meta">— From somewhere in Brazil</div>
           </article>
           <article class="quote-card">
-            <p class="quote-copy">“I told a stranger the thing I've been holding for three years. It took 4 minutes. I feel lighter.”</p>
+            <p class="quote-copy">"I told a stranger the thing I've been holding for three years. It took 4 minutes. I feel lighter."</p>
             <div class="quote-meta">— From somewhere in India</div>
           </article>
           <button class="ob-btn" data-action="welcome-next" type="button">Get started ${icon('arrowRight')}</button>
@@ -383,17 +386,15 @@ class NightCallApp {
         ${this.statusBarTemplate()}
         ${this.stepsTemplate(2)}
         <div class="ob-scroll">
-          <h2 class="ob-title" id="setup-title">Who are you tonight?</h2>
+          <h2 class="ob-title" id="setup-title" data-autofocus tabindex="-1">Who are you tonight?</h2>
           <p class="ob-kicker">Pick an avatar and a name. No real info needed.</p>
           <div class="section-label">Your avatar</div>
           <div class="avatar-grid" role="radiogroup" aria-label="Choose avatar">
-            ${AVATARS.map(
-              (avatar) => `
-                <button class="ava ${avatar === this.state.onboarding.avatar ? 'sel' : ''}" data-avatar="${avatar}" role="radio" aria-checked="${avatar === this.state.onboarding.avatar}" type="button">
-                  ${icon(avatar)}
-                </button>
-              `,
-            ).join('')}
+            ${AVATARS.map((avatar) => `
+              <button class="ava ${avatar === this.state.onboarding.avatar ? 'sel' : ''}" data-avatar="${avatar}" role="radio" aria-checked="${avatar === this.state.onboarding.avatar}" type="button">
+                ${icon(avatar)}
+              </button>
+            `).join('')}
           </div>
           <label class="section-label" for="alias-input">Your alias</label>
           <input class="nc-input" id="alias-input" data-alias-input placeholder="e.g. TwilightFox, SilentNorth…" maxlength="32" autocomplete="nickname" value="${this.escapeHtml(this.state.onboarding.alias)}" />
@@ -412,21 +413,14 @@ class NightCallApp {
   }
 
   private timezoneOptionsTemplate(): string {
-    const selectedTimezone = this.state.onboarding.timezone;
+    const sel = this.state.onboarding.timezone;
     return `
       <option value="">Select your timezone…</option>
-      ${TIMEZONES.map(
-        ({ group, zones }) => `
-          <optgroup label="${group}">
-            ${zones
-              .map(
-                ({ value, label }) =>
-                  `<option value="${value}" ${value === selectedTimezone ? 'selected' : ''}>${label}</option>`,
-              )
-              .join('')}
-          </optgroup>
-        `,
-      ).join('')}
+      ${TIMEZONES.map(({ group, zones }) => `
+        <optgroup label="${group}">
+          ${zones.map(({ value, label }) => `<option value="${value}" ${value === sel ? 'selected' : ''}>${label}</option>`).join('')}
+        </optgroup>
+      `).join('')}
     `;
   }
 
@@ -436,29 +430,11 @@ class NightCallApp {
         ${this.statusBarTemplate()}
         ${this.stepsTemplate(3)}
         <div class="ob-scroll">
-          <h2 class="ob-title" id="confirm-title">Before you enter.</h2>
+          <h2 class="ob-title" id="confirm-title" data-autofocus tabindex="-1">Before you enter.</h2>
           <p class="ob-kicker">Three things to confirm so everyone stays safe.</p>
-          ${this.confirmationItemTemplate(
-            'age',
-            'userCheck',
-            'You are 18 or older',
-            'NightCall is for adults only. Anonymous late-night voice calls with strangers are not appropriate for minors.',
-            'I confirm I am 18 years of age or older',
-          )}
-          ${this.confirmationItemTemplate(
-            'privacy',
-            'shieldOff',
-            'We are not responsible for what you share',
-            'NightCall is anonymous by design. We do not store your identity. Any personal information you choose to share verbally during a call is entirely your own responsibility. Do not share sensitive data like your address, passwords, or financial information.',
-            'I understand NightCall is not responsible for personal information I voluntarily share',
-          )}
-          ${this.confirmationItemTemplate(
-            'terms',
-            'fileText',
-            'Terms & community rules',
-            'No harassment. No hate speech. No sharing private information of others. Violations result in a permanent ban. The community reporting system keeps this safe.',
-            'I accept the Terms of Service and Community Guidelines',
-          )}
+          ${this.confirmationItemTemplate('age', 'userCheck', 'You are 18 or older', 'NightCall is for adults only. Anonymous late-night voice calls with strangers are not appropriate for minors.', 'I confirm I am 18 years of age or older')}
+          ${this.confirmationItemTemplate('privacy', 'shieldOff', 'We are not responsible for what you share', 'NightCall is anonymous by design. We do not store your identity. Any personal information you choose to share verbally during a call is entirely your own responsibility. Do not share sensitive data like your address, passwords, or financial information.', 'I understand NightCall is not responsible for personal information I voluntarily share')}
+          ${this.confirmationItemTemplate('terms', 'fileText', 'Terms & community rules', 'No harassment. No hate speech. No sharing private information of others. Violations result in a permanent ban. The community reporting system keeps this safe.', 'I accept the Terms of Service and Community Guidelines')}
           <button class="ob-btn" data-action="enter-nightcall" type="button" ${this.canEnterNightCall() ? '' : 'disabled'}>Enter NightCall ${icon('moon')}</button>
           <p class="fineprint">Your alias and avatar are the only things we store.</p>
         </div>
@@ -466,13 +442,7 @@ class NightCallApp {
     `;
   }
 
-  private confirmationItemTemplate(
-    key: ConfirmationKey,
-    iconName: IconName,
-    title: string,
-    description: string,
-    label: string,
-  ): string {
+  private confirmationItemTemplate(key: ConfirmationKey, iconName: IconName, title: string, description: string, label: string): string {
     return `
       <article class="confirm-item">
         <div class="ci-header">
@@ -496,7 +466,7 @@ class NightCallApp {
         ${this.statusBarTemplate()}
         <div class="scroll">
           <div class="nc-hero nc-hero--compact">
-            <h1 class="nc-logo" id="closed-title">Night<span>Call</span></h1>
+            <h1 class="nc-logo" id="closed-title" data-autofocus tabindex="-1">Night<span>Call</span></h1>
             <p class="nc-tagline">10 minutes. One stranger. Then it's over.</p>
           </div>
           <div class="nc-time-card">
@@ -509,11 +479,14 @@ class NightCallApp {
               <div class="countdown-sub">at 2:00 AM your local time</div>
             </div>
           </div>
-          <button class="nc-call-btn disabled" disabled type="button">${icon('phone')} Line is closed</button>
+          <button class="nc-call-btn nc-call-btn--closed" data-call-btn disabled type="button">
+            <span class="btn-countdown-label">Line opens in</span>
+            <span class="btn-countdown-time" data-call-btn-countdown>—</span>
+          </button>
           ${this.statsTemplate('closed')}
           <article class="wall-item">
             <div class="quote-label">From The Wall · last night</div>
-            <p class="wall-quote">“My word was 'lighter'. I didn't expect to mean it.”</p>
+            <p class="wall-quote">"My word was 'lighter'. I didn't expect to mean it."</p>
             <div class="wall-meta"><span class="wall-dot" aria-hidden="true"></span>From somewhere in the UK <span class="wall-dot" aria-hidden="true"></span> 4h ago</div>
           </article>
         </div>
@@ -528,7 +501,7 @@ class NightCallApp {
         ${this.statusBarTemplate()}
         <div class="scroll">
           <div class="nc-hero nc-hero--compact">
-            <h1 class="nc-logo" id="open-title">Night<span>Call</span></h1>
+            <h1 class="nc-logo" id="open-title" data-autofocus tabindex="-1">Night<span>Call</span></h1>
             <p class="nc-tagline">10 minutes. One stranger. Then it's over.</p>
           </div>
           <div class="nc-time-card">
@@ -547,7 +520,7 @@ class NightCallApp {
           <button class="nc-call-btn" data-action="start-call" type="button">${icon('phone')} Call a Stranger</button>
           ${this.statsTemplate('open')}
           <article class="wall-item">
-            <p class="wall-quote">“I told a stranger I loved someone I've never admitted loving. Saying it out loud made it more real than anything.”</p>
+            <p class="wall-quote">"I told a stranger I loved someone I've never admitted loving. Saying it out loud made it more real than anything."</p>
             <div class="wall-meta"><span class="wall-dot" aria-hidden="true"></span>From somewhere in Brazil <span class="wall-dot" aria-hidden="true"></span> 2h ago</div>
           </article>
         </div>
@@ -557,39 +530,25 @@ class NightCallApp {
   }
 
   private statsTemplate(mode: 'open' | 'closed'): string {
-    const items =
-      mode === 'open'
-        ? [
-            { value: this.state.calls, label: 'My calls', stat: 'calls' },
-            { value: this.state.passesLeft, label: 'Passes left', stat: 'passes' },
-            { value: this.state.wallCount, label: 'On The Wall', stat: 'wall' },
-          ]
-        : [
-            { value: 289, label: 'Awake now', stat: 'awake' },
-            { value: this.state.passesLeft + 1, label: 'My passes', stat: 'passes' },
-            { value: this.state.wallCount, label: 'Wall posts', stat: 'wall' },
-          ];
-
+    const items = mode === 'open'
+      ? [{ value: this.state.calls, label: 'My calls', stat: 'calls' }, { value: this.state.passesLeft, label: 'Passes left', stat: 'passes' }, { value: this.state.wallCount, label: 'On The Wall', stat: 'wall' }]
+      : [{ value: 289, label: 'Awake now', stat: 'awake' }, { value: this.state.passesLeft + 1, label: 'My passes', stat: 'passes' }, { value: this.state.wallCount, label: 'Wall posts', stat: 'wall' }];
     return `
       <div class="nc-stats" aria-label="Tonight stats">
-        ${items
-          .map(
-            ({ value, label, stat }) =>
-              `<article class="nc-stat"><div class="nc-stat-num" data-stat="${stat}">${value}</div><div class="nc-stat-label">${label}</div></article>`,
-          )
-          .join('')}
+        ${items.map(({ value, label, stat }) => `<article class="nc-stat"><div class="nc-stat-num" data-stat="${stat}">${value}</div><div class="nc-stat-label">${label}</div></article>`).join('')}
       </div>
     `;
   }
 
   private callingTemplate(): string {
+    const hasPass = this.state.passesLeft > 0;
     return `
       <section class="screen" data-screen="calling" aria-labelledby="calling-title">
         ${this.statusBarTemplate()}
         <div class="calling-bg">
           <div class="calling-ring" aria-hidden="true"><div class="calling-emoji">🌙</div></div>
           <div class="calling-label">Connecting</div>
-          <h2 class="calling-title" id="calling-title">Finding your stranger...</h2>
+          <h2 class="calling-title" id="calling-title" data-autofocus tabindex="-1">Finding your stranger...</h2>
           <p class="calling-sub">Somewhere in the world,<br />someone is waiting too.</p>
           <div class="call-actions">
             <div class="call-action">
@@ -601,6 +560,7 @@ class NightCallApp {
               <div class="call-action-label">Connect</div>
             </div>
           </div>
+          ${hasPass ? `<button class="pass-link" data-action="use-pass" type="button">Use a pass to skip this match — ${this.state.passesLeft} ${this.state.passesLeft === 1 ? 'pass' : 'passes'} left</button>` : ''}
         </div>
       </section>
     `;
@@ -611,7 +571,7 @@ class NightCallApp {
       <section class="screen" data-screen="incall" aria-labelledby="incall-question">
         ${this.statusBarTemplate()}
         <div class="incall-top">
-          <h2 class="incall-qs" id="incall-question">“What's something you've been carrying alone that you wish someone knew?”</h2>
+          <h2 class="incall-qs" id="incall-question" data-autofocus tabindex="-1">"What's something you've been carrying alone that you wish someone knew?"</h2>
           <div class="timer-bar" aria-hidden="true"><div class="timer-fill" data-timer-fill></div></div>
           <div class="timer-text" data-timer-text aria-live="polite">6:14 remaining</div>
         </div>
@@ -622,14 +582,14 @@ class NightCallApp {
             </div>
             <div class="wave-label">Your stranger is speaking...</div>
           </div>
-          <aside class="incall-hint">“The best NightCalls happen when you say the thing you've never said out loud. This stranger won't remember your name. That's the point.”</aside>
+          <aside class="incall-hint">"The best NightCalls happen when you say the thing you've never said out loud. This stranger won't remember your name. That's the point."</aside>
           <article class="transcript-card">
             <div class="transcript-meta">From Tokyo · Anonymous</div>
-            <p class="transcript-copy">“I quit my job today. Nobody knows yet. I feel terrified and completely free at the same time...”</p>
+            <p class="transcript-copy">"I quit my job today. Nobody knows yet. I feel terrified and completely free at the same time..."</p>
           </article>
           <article class="transcript-card transcript-card--you">
             <div class="transcript-meta">You</div>
-            <p class="transcript-copy">“That's incredible. The terrified part is the honest part.”</p>
+            <p class="transcript-copy">"That's incredible. The terrified part is the honest part."</p>
           </article>
         </div>
         <button class="incall-end" data-action="end-call" type="button">${icon('phoneOff')} End call</button>
@@ -643,7 +603,7 @@ class NightCallApp {
         ${this.statusBarTemplate()}
         <div class="post-scroll">
           <div class="post-emoji" aria-hidden="true">🌌</div>
-          <h2 class="post-title" id="post-title">It's over.</h2>
+          <h2 class="post-title" id="post-title" data-autofocus tabindex="-1">It's over.</h2>
           <p class="post-sub">That conversation existed for exactly 10 minutes. You'll never speak to them again. That made it real.</p>
           <label class="word-card">
             <span class="word-label">One word. That's all you keep.</span>
@@ -658,20 +618,17 @@ class NightCallApp {
   }
 
   private wallTemplate(): string {
-    const posts = WALL_POSTS.map(
-      ({ quote, region, age }) => `
-        <article class="wall-item">
-          <p class="wall-quote">“${quote}”</p>
-          <div class="wall-meta"><span class="wall-dot" aria-hidden="true"></span>From somewhere in ${region} <span class="wall-dot" aria-hidden="true"></span> ${age}</div>
-        </article>
-      `,
-    ).join('');
-
+    const posts = WALL_POSTS.map(({ quote, region, age }) => `
+      <article class="wall-item">
+        <p class="wall-quote">"${quote}"</p>
+        <div class="wall-meta"><span class="wall-dot" aria-hidden="true"></span>From somewhere in ${region} <span class="wall-dot" aria-hidden="true"></span> ${age}</div>
+      </article>
+    `).join('');
     return `
       <section class="screen" data-screen="wall" aria-labelledby="wall-title">
         ${this.statusBarTemplate()}
         <div class="wall-head">
-          <h2 class="wall-title" id="wall-title">The Wall</h2>
+          <h2 class="wall-title" id="wall-title" data-autofocus tabindex="-1">The Wall</h2>
           <p class="wall-subtitle">Things people wish they'd said. Anonymous. Forever.</p>
         </div>
         <div class="scroll">${posts}</div>
@@ -680,25 +637,166 @@ class NightCallApp {
     `;
   }
 
-  private bottomNavTemplate(active: NavTarget): string {
-    const navItems: Array<{ target?: NavTarget; icon: IconName; label: string; aria: string; disabled?: boolean }> = [
-      { target: 'tonight', icon: 'moon', label: 'Tonight', aria: 'Tonight' },
-      { target: 'wall', icon: 'message', label: 'The Wall', aria: 'Wall' },
-      { icon: 'history', label: 'History', aria: 'History', disabled: true },
-      { icon: 'user', label: 'Me', aria: 'Me', disabled: true },
-    ];
+  private historyTemplate(): string {
+    const timezone = this.state.onboarding.timezone || 'Asia/Kolkata';
+    const words = this.state.savedWords;
+    const calls = this.state.savedCalls;
+
+    const wordCloud = words.length > 0 ? `
+      <div class="word-cloud" aria-label="Your saved words">
+        ${words.map((w) => `<span class="word-pill">${this.escapeHtml(w)}</span>`).join('')}
+      </div>
+    ` : '';
+
+    const callItems = calls.length === 0
+      ? `<div class="history-empty">"Your first call is tonight."</div>`
+      : calls.map((call) => {
+          const dateStr = new Intl.DateTimeFormat('en-US', {
+            timeZone: timezone,
+            month: 'short',
+            day: 'numeric',
+            hour: 'numeric',
+            minute: '2-digit',
+            hour12: true,
+          }).format(new Date(call.startedAt));
+          const mins = Math.floor(call.durationSecs / 60);
+          const secs = call.durationSecs % 60;
+          return `
+            <article class="call-record">
+              <div class="call-record-top">
+                <span class="call-record-date">${dateStr}</span>
+                <span class="call-record-duration">${mins}:${String(secs).padStart(2, '0')}</span>
+              </div>
+              ${call.word
+                ? `<div class="call-record-word">${this.escapeHtml(call.word)}</div>`
+                : `<div class="call-record-word call-record-word--none">No word saved</div>`}
+            </article>
+          `;
+        }).join('');
 
     return `
+      <section class="screen" data-screen="history" aria-labelledby="history-title">
+        ${this.statusBarTemplate()}
+        <div class="wall-head">
+          <h2 class="wall-title" id="history-title" data-autofocus tabindex="-1">Your Calls</h2>
+          <p class="wall-subtitle">Anonymous memories, kept locally.</p>
+        </div>
+        ${wordCloud}
+        <div class="scroll">${callItems}</div>
+        ${this.bottomNavTemplate('history')}
+      </section>
+    `;
+  }
+
+  private meTemplate(): string {
+    const { avatar, alias, timezone } = this.state.onboarding;
+    const totalMins = Math.floor(this.state.savedCalls.reduce((sum, c) => sum + c.durationSecs, 0) / 60);
+    const tzLabel = TIMEZONES.flatMap((g) => g.zones).find((z) => z.value === timezone)?.label ?? timezone;
+    const notifStatus = this.state.notificationsEnabled ? 'On' : 'Off';
+
+    return `
+      <section class="screen" data-screen="me" aria-labelledby="me-title">
+        ${this.statusBarTemplate()}
+        <div class="me-scroll">
+          <div class="me-profile">
+            <div class="me-avatar">${icon(avatar)}</div>
+            <h2 class="me-alias" id="me-title" data-autofocus tabindex="-1">${this.escapeHtml(alias || 'Anonymous')}</h2>
+            <div class="me-tier">${this.state.tier === 'premium' ? 'Premium' : 'Free'}</div>
+          </div>
+          <div class="me-stats">
+            <article class="me-stat"><div class="me-stat-num">${this.state.calls}</div><div class="me-stat-label">Calls</div></article>
+            <article class="me-stat"><div class="me-stat-num">${totalMins}</div><div class="me-stat-label">Minutes</div></article>
+            <article class="me-stat"><div class="me-stat-num">${this.state.savedWords.length}</div><div class="me-stat-label">Words</div></article>
+          </div>
+          ${this.state.tier === 'free' ? `
+            <div class="upgrade-banner">
+              <div class="upgrade-banner-title">Go Premium</div>
+              <div class="upgrade-banner-sub">5 calls/night · unlimited passes · custom avatars · streak badges · full history</div>
+              <button class="upgrade-btn" data-action="upgrade" type="button">Go Premium →</button>
+            </div>
+          ` : ''}
+          <div class="settings-section">
+            <button class="settings-row" data-action="edit-timezone" type="button">
+              <span class="settings-row-label">Timezone</span>
+              <span class="settings-row-right"><span class="settings-row-value">${this.escapeHtml(tzLabel)}</span><span class="settings-row-chevron">›</span></span>
+            </button>
+            <button class="settings-row" data-action="toggle-notifications" type="button">
+              <span class="settings-row-label">Notifications</span>
+              <span class="settings-row-right"><span class="settings-row-value" data-notif-value>${notifStatus}</span><span class="settings-row-chevron">›</span></span>
+            </button>
+            <button class="settings-row" data-action="edit-alias" type="button">
+              <span class="settings-row-label">Change alias</span>
+              <span class="settings-row-chevron">›</span>
+            </button>
+            <button class="settings-row" data-action="open-privacy" type="button">
+              <span class="settings-row-label">Privacy &amp; data</span>
+              <span class="settings-row-chevron">›</span>
+            </button>
+            <button class="settings-row" data-action="delete-account" type="button">
+              <span class="settings-row-label settings-row-label--danger">Delete account</span>
+              <span class="settings-row-chevron">›</span>
+            </button>
+          </div>
+        </div>
+        ${this.bottomNavTemplate('me')}
+      </section>
+    `;
+  }
+
+  private privacyTemplate(): string {
+    return `
+      <section class="screen" data-screen="privacy" aria-labelledby="privacy-title">
+        ${this.statusBarTemplate()}
+        <div class="wall-head">
+          <button class="back-btn" data-action="back-to-me" type="button">← Back</button>
+          <h2 class="wall-title" id="privacy-title" data-autofocus tabindex="-1">Privacy &amp; Data</h2>
+        </div>
+        <div class="privacy-scroll">
+          <div class="privacy-section">
+            <div class="privacy-section-title">What we store</div>
+            <div class="privacy-section-body"><ul>
+              <li>Your alias and avatar (locally on this device only)</li>
+              <li>Your selected timezone</li>
+              <li>Words you choose to save after calls</li>
+              <li>Your call history (locally on this device only)</li>
+            </ul></div>
+          </div>
+          <div class="privacy-section">
+            <div class="privacy-section-title">What we do NOT store</div>
+            <div class="privacy-section-body"><ul>
+              <li>Voice audio — calls are never recorded</li>
+              <li>Your real identity or name</li>
+              <li>Your exact location</li>
+              <li>Any information shared verbally during calls</li>
+            </ul></div>
+          </div>
+          <div class="privacy-section">
+            <div class="privacy-section-title">How to delete your data</div>
+            <div class="privacy-section-body">Use "Delete account" in the Me tab settings. This removes all locally stored data from this device immediately and cannot be undone.</div>
+          </div>
+          <div class="privacy-section">
+            <div class="privacy-section-title">Contact</div>
+            <div class="privacy-section-body">nightcall-privacy@nightcall.app</div>
+          </div>
+        </div>
+      </section>
+    `;
+  }
+
+  private bottomNavTemplate(active: NavTarget): string {
+    const navItems: Array<{ target: NavTarget; icon: IconName; label: string; aria: string }> = [
+      { target: 'tonight', icon: 'moon', label: 'Tonight', aria: 'Tonight' },
+      { target: 'wall', icon: 'message', label: 'The Wall', aria: 'Wall' },
+      { target: 'history', icon: 'history', label: 'History', aria: 'History' },
+      { target: 'me', icon: 'user', label: 'Me', aria: 'Me' },
+    ];
+    return `
       <nav class="bnav" aria-label="Primary navigation">
-        ${navItems
-          .map(
-            (item) => `
-              <button class="bnav-item ${active === item.target ? 'active' : ''}" ${item.target ? `data-nav="${item.target}"` : ''} type="button" aria-label="${item.aria}" ${active === item.target ? 'aria-current="page"' : ''} ${item.disabled ? 'disabled' : ''}>
-                ${icon(item.icon)}${item.label}
-              </button>
-            `,
-          )
-          .join('')}
+        ${navItems.map((item) => `
+          <button class="bnav-item ${active === item.target ? 'active' : ''}" data-nav="${item.target}" type="button" aria-label="${item.aria}" ${active === item.target ? 'aria-current="page"' : ''}>
+            ${icon(item.icon)}${item.label}
+          </button>
+        `).join('')}
       </nav>
     `;
   }
@@ -715,6 +813,8 @@ class NightCallApp {
       if (avatar) this.selectAvatar(avatar);
       if (navTarget === 'tonight') this.setScreen(this.resolveHomeScreen());
       if (navTarget === 'wall') this.setScreen('wall');
+      if (navTarget === 'history') this.setScreen('history');
+      if (navTarget === 'me') this.setScreen('me');
       if (action === 'welcome-next') this.setScreen('onboarding-setup');
       if (action === 'setup-next') this.handleSetupNext();
       if (action === 'enter-nightcall') this.enterNightCall();
@@ -724,6 +824,13 @@ class NightCallApp {
       if (action === 'end-call') this.endCall();
       if (action === 'save-word') this.saveWord();
       if (action === 'open-wall') this.setScreen('wall');
+      if (action === 'use-pass') this.usePass();
+      if (action === 'upgrade') this.showToast('Premium coming soon — stay tuned 🌙');
+      if (action === 'edit-timezone' || action === 'edit-alias') this.setScreen('onboarding-setup');
+      if (action === 'toggle-notifications') void this.toggleNotifications();
+      if (action === 'open-privacy') this.setScreen('privacy');
+      if (action === 'back-to-me') this.setScreen('me');
+      if (action === 'delete-account') this.deleteAccount();
     });
 
     this.root.addEventListener('input', (event) => {
@@ -740,7 +847,6 @@ class NightCallApp {
         this.state.onboarding.timezone = target.value;
         this.saveState();
       }
-
       const confirmation = (target as HTMLInputElement).dataset.confirmation as ConfirmationKey | undefined;
       if (confirmation) {
         this.state.onboarding.confirmations[confirmation] = (target as HTMLInputElement).checked;
@@ -751,21 +857,45 @@ class NightCallApp {
   }
 
   private setScreen(screen: ScreenId, options: { skipPersistence?: boolean } = {}): void {
+    // Re-render screens whose content depends on mutable state
+    this.refreshScreen(screen);
+
     this.state.activeScreen = screen;
+    let activeNode: HTMLElement | null = null;
+
     this.root.querySelectorAll<HTMLElement>('[data-screen]').forEach((node) => {
       const isActive = node.dataset.screen === screen;
       node.classList.toggle('active', isActive);
       node.setAttribute('aria-hidden', String(!isActive));
+      if (isActive) activeNode = node;
     });
 
     if (screen !== 'incall') this.stopTimer();
     if (screen === 'incall') this.startTimer();
     if (!options.skipPersistence) this.saveState();
     this.updateClockAndWindow();
+
+    if (activeNode) {
+      window.requestAnimationFrame(() => {
+        (activeNode as HTMLElement).querySelector<HTMLElement>('[data-autofocus]')?.focus({ preventScroll: true });
+      });
+    }
+  }
+
+  private refreshScreen(screen: ScreenId): void {
+    const refreshable: Partial<Record<ScreenId, () => string>> = {
+      me: () => this.meTemplate(),
+      history: () => this.historyTemplate(),
+      calling: () => this.callingTemplate(),
+    };
+    const template = refreshable[screen];
+    if (!template) return;
+    const node = this.root.querySelector<HTMLElement>(`[data-screen="${screen}"]`);
+    if (node) node.outerHTML = template();
   }
 
   private resolveHomeScreen(): ScreenId {
-    return isLineOpen() ? 'home-open' : 'home-closed';
+    return isLineOpen(this.state.onboarding.timezone) ? 'home-open' : 'home-closed';
   }
 
   private scheduleSplashTransition(): void {
@@ -799,7 +929,8 @@ class NightCallApp {
     }
 
     this.saveState();
-    this.setScreen('onboarding-confirm');
+    // Return to Me tab if editing from settings; otherwise advance onboarding
+    this.setScreen(this.state.onboarding.completed ? 'me' : 'onboarding-confirm');
   }
 
   private enterNightCall(): void {
@@ -807,10 +938,51 @@ class NightCallApp {
       this.showToast('Confirm all three items first...');
       return;
     }
-
     this.state.onboarding.completed = true;
     this.saveState();
+    void this.requestPushPermission();
     this.setScreen(this.resolveHomeScreen());
+  }
+
+  private async requestPushPermission(): Promise<void> {
+    if (!('Notification' in window)) return;
+    if (Notification.permission === 'granted') {
+      this.state.notificationsEnabled = true;
+      this.saveState();
+      return;
+    }
+    if (Notification.permission === 'denied') return;
+    const permission = await Notification.requestPermission();
+    if (permission === 'granted') {
+      this.state.notificationsEnabled = true;
+      this.saveState();
+      this.showToast("We'll remind you at 1:55 AM every night 🌙");
+    }
+  }
+
+  private async toggleNotifications(): Promise<void> {
+    if (!('Notification' in window)) {
+      this.showToast('Notifications not supported on this browser');
+      return;
+    }
+    if (this.state.notificationsEnabled) {
+      this.state.notificationsEnabled = false;
+      this.saveState();
+      this.showToast('Notifications turned off');
+    } else {
+      if (Notification.permission === 'denied') {
+        this.showToast('Enable notifications in your browser settings');
+        return;
+      }
+      const perm = await Notification.requestPermission();
+      if (perm === 'granted') {
+        this.state.notificationsEnabled = true;
+        this.saveState();
+        this.showToast("We'll remind you at 1:55 AM every night 🌙");
+      }
+    }
+    const notifValue = this.root.querySelector<HTMLElement>('[data-notif-value]');
+    if (notifValue) notifValue.textContent = this.state.notificationsEnabled ? 'On' : 'Off';
   }
 
   private canEnterNightCall(): boolean {
@@ -832,14 +1004,31 @@ class NightCallApp {
   }
 
   private startCall(): void {
-    this.callRemainingSeconds = INITIAL_REMAINING_SECONDS;
+    this.callRemainingSeconds = CALL_DURATION_SECONDS;
+    this.callStartedAt = Date.now();
+    haptic([50, 30, 50]);
     this.setScreen('incall');
     this.updateTimerDisplay();
   }
 
   private endCall(): void {
     this.stopTimer();
+    haptic([100, 50, 100, 50, 200]);
+
+    const durationSecs = this.callStartedAt > 0
+      ? Math.min(CALL_DURATION_SECONDS, Math.floor((Date.now() - this.callStartedAt) / 1_000))
+      : CALL_DURATION_SECONDS - this.callRemainingSeconds;
+
+    const newCall: SavedCall = {
+      id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+      startedAt: this.callStartedAt || Date.now() - durationSecs * 1_000,
+      durationSecs,
+      word: null,
+    };
+
+    this.state.savedCalls = [newCall, ...this.state.savedCalls].slice(0, 50);
     this.state.calls += 1;
+    this.callStartedAt = 0;
     this.saveState();
     this.updateStats();
     this.setScreen('postcall');
@@ -864,11 +1053,9 @@ class NightCallApp {
     const timerText = this.root.querySelector<HTMLElement>('[data-timer-text]');
     const timerFill = this.root.querySelector<HTMLElement>('[data-timer-fill]');
     if (!timerText || !timerFill) return;
-
     const minutes = Math.floor(this.callRemainingSeconds / 60);
     const seconds = String(this.callRemainingSeconds % 60).padStart(2, '0');
     const percentage = Math.round((this.callRemainingSeconds / CALL_DURATION_SECONDS) * 100);
-
     timerText.textContent = `${minutes}:${seconds} remaining`;
     timerFill.style.width = `${percentage}%`;
   }
@@ -884,28 +1071,52 @@ class NightCallApp {
     }
 
     this.state.savedWords = [word, ...this.state.savedWords].slice(0, 25);
+    const latest = this.state.savedCalls[0];
+    if (latest?.word === null) latest.word = word;
+
     this.saveState();
     if (input) input.value = '';
-    this.showToast(`Word saved: “${word}” 🌙`);
+    haptic(60);
+    this.showToast(`Word saved: "${word}" 🌙`);
     window.setTimeout(() => this.setScreen(this.resolveHomeScreen()), 1_500);
   }
 
+  private usePass(): void {
+    if (this.state.passesLeft <= 0) return;
+    this.state.passesLeft -= 1;
+    this.saveState();
+    haptic([40, 20, 40]);
+    this.showToast('Pass used — finding another stranger…');
+
+    const passLink = this.root.querySelector<HTMLButtonElement>('[data-action="use-pass"]');
+    if (passLink) {
+      if (this.state.passesLeft > 0) {
+        passLink.textContent = `Use a pass to skip this match — ${this.state.passesLeft} ${this.state.passesLeft === 1 ? 'pass' : 'passes'} left`;
+      } else {
+        passLink.remove();
+      }
+    }
+  }
+
+  private deleteAccount(): void {
+    const confirmed = window.confirm(
+      'Delete your NightCall account?\n\nThis removes your alias, avatar, call history, and saved words from this device. This cannot be undone.',
+    );
+    if (!confirmed) return;
+    window.localStorage.removeItem(LOCAL_STORAGE_KEY);
+    this.showToast('Account deleted.');
+    window.setTimeout(() => location.reload(), 1_500);
+  }
+
   private updateStats(): void {
-    this.root.querySelectorAll<HTMLElement>('[data-stat="calls"]').forEach((node) => {
-      node.textContent = String(this.state.calls);
-    });
-    this.root.querySelectorAll<HTMLElement>('[data-stat="passes"]').forEach((node) => {
-      node.textContent = String(this.state.passesLeft);
-    });
-    this.root.querySelectorAll<HTMLElement>('[data-stat="wall"]').forEach((node) => {
-      node.textContent = String(this.state.wallCount);
-    });
+    this.root.querySelectorAll<HTMLElement>('[data-stat="calls"]').forEach((n) => { n.textContent = String(this.state.calls); });
+    this.root.querySelectorAll<HTMLElement>('[data-stat="passes"]').forEach((n) => { n.textContent = String(this.state.passesLeft); });
+    this.root.querySelectorAll<HTMLElement>('[data-stat="wall"]').forEach((n) => { n.textContent = String(this.state.wallCount); });
   }
 
   private showToast(message: string): void {
     const toast = this.root.querySelector<HTMLElement>('[data-toast]');
     if (!toast) return;
-
     toast.textContent = message;
     toast.classList.add('show');
     if (this.toastTimerId !== undefined) window.clearTimeout(this.toastTimerId);
@@ -913,30 +1124,51 @@ class NightCallApp {
   }
 
   private updateClockAndWindow(): void {
-    const now = new Date();
-    const time = formatTime(now);
+    const timezone = this.state.onboarding.timezone || 'Asia/Kolkata';
 
-    this.root.querySelectorAll<HTMLElement>('[data-live-clock]').forEach((node) => {
-      node.textContent = time.status;
-    });
+    const clockParts = new Intl.DateTimeFormat('en-US', {
+      timeZone: timezone,
+      hour: 'numeric',
+      minute: '2-digit',
+      hour12: true,
+    }).formatToParts(new Date());
 
-    this.root.querySelectorAll<HTMLElement>('[data-main-clock]').forEach((node) => {
-      node.textContent = time.clock;
-    });
+    const clockHour = clockParts.find((p) => p.type === 'hour')?.value ?? '';
+    const clockMinute = clockParts.find((p) => p.type === 'minute')?.value ?? '';
+    const clockPeriod = clockParts.find((p) => (p.type as string).toLowerCase() === 'dayperiod')?.value ?? '';
+    const clockStr = `${clockHour}:${clockMinute}`;
+    const statusStr = `${clockHour}:${clockMinute} ${clockPeriod}`.trimEnd();
+
+    this.root.querySelectorAll<HTMLElement>('[data-live-clock]').forEach((n) => { n.textContent = statusStr; });
+    this.root.querySelectorAll<HTMLElement>('[data-main-clock]').forEach((n) => { n.textContent = clockStr; });
+
+    const openSecs = getSecondsUntilOpen(timezone);
 
     const openCountdown = this.root.querySelector<HTMLElement>('[data-open-countdown]');
-    if (openCountdown) openCountdown.textContent = formatDuration(nextOpenDate(now).getTime() - now.getTime());
+    if (openCountdown) openCountdown.textContent = formatDuration(openSecs * 1_000);
 
+    const callBtnCountdown = this.root.querySelector<HTMLElement>('[data-call-btn-countdown]');
+    if (callBtnCountdown) callBtnCountdown.textContent = formatDuration(openSecs * 1_000);
+
+    // Announce to screen readers on each minute boundary
+    const announceEl = this.root.querySelector<HTMLElement>('[data-countdown-announce]');
+    if (announceEl && openSecs > 0 && openSecs % 60 === 0) {
+      const h = Math.floor(openSecs / 3600);
+      const m = Math.floor((openSecs % 3600) / 60);
+      announceEl.textContent = h > 0
+        ? `Line opens in ${h} ${h === 1 ? 'hour' : 'hours'} and ${m} minutes`
+        : `Line opens in ${m} ${m === 1 ? 'minute' : 'minutes'}`;
+    }
+
+    const closeSecs = getSecondsUntilClose(timezone);
     const closeCountdown = this.root.querySelector<HTMLElement>('[data-close-countdown]');
     if (closeCountdown) {
-      const milliseconds = closeDate(now).getTime() - now.getTime();
-      const totalSeconds = Math.max(0, Math.floor(milliseconds / 1_000));
-      const minutes = Math.floor(totalSeconds / 60);
-      const seconds = totalSeconds % 60;
+      const minutes = Math.floor(closeSecs / 60);
+      const seconds = closeSecs % 60;
       closeCountdown.textContent = `${minutes}:${String(seconds).padStart(2, '0')}`;
     }
 
-    const shouldBeHomeOpen = isLineOpen(now);
+    const shouldBeHomeOpen = isLineOpen(timezone);
     if (this.state.activeScreen === 'home-open' && !shouldBeHomeOpen) this.setScreen('home-closed');
     if (this.state.activeScreen === 'home-closed' && shouldBeHomeOpen) this.setScreen('home-open');
   }
@@ -946,28 +1178,15 @@ class NightCallApp {
       this.stopTimer();
       return;
     }
-
     if (this.state.activeScreen === 'incall') this.startTimer();
     this.updateClockAndWindow();
   }
 
   private escapeHtml(value: string): string {
-    return value.replace(/[&<>"]/g, (character) => {
-      const entities: Record<string, string> = {
-        '&': '&amp;',
-        '<': '&lt;',
-        '>': '&gt;',
-        '"': '&quot;',
-      };
-      return entities[character];
-    });
+    return value.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c] ?? c));
   }
 }
 
 const appRoot = document.querySelector<HTMLElement>('#app');
-
-if (!appRoot) {
-  throw new Error('NightCall mount node not found.');
-}
-
+if (!appRoot) throw new Error('NightCall mount node not found.');
 new NightCallApp(appRoot);

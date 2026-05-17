@@ -12,5 +12,10 @@
   "devDependencies": {
     "typescript": "^5.8.3",
     "vite": "^6.3.5"
+  },
+  "dependencies": {
+    "@fontsource/dm-sans": "^5.2.8",
+    "@fontsource/dm-serif-display": "^5.2.8",
+    "@sentry/browser": "^10.53.1"
   }
 }
