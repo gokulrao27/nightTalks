@@ -1041,8 +1041,10 @@ class NightCallApp {
       this.bindSocketEvents();
       void this.requestPushPermission();
       this.setScreen(this.resolveHomeScreen());
-    } catch {
-      this.showToast('Something went wrong — try again');
+    } catch (error) {
+      console.error('enterNightCall error:', error);
+      const message = error instanceof Error ? error.message : String(error);
+      this.showToast(`Something went wrong: ${message}`);
     }
   }
 
