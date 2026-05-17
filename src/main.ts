@@ -1023,9 +1023,9 @@ class NightCallApp {
         pseudonym: this.state.onboarding.alias || 'Anonymous',
         avatar: this.state.onboarding.avatar,
         timezone: this.state.onboarding.timezone,
-        consent_age: this.state.onboarding.confirmations.age,
-        consent_anon: this.state.onboarding.confirmations.privacy,
-        consent_terms: this.state.onboarding.confirmations.terms,
+        consentAge: this.state.onboarding.confirmations.age,
+        consentAnon: this.state.onboarding.confirmations.privacy,
+        consentTerms: this.state.onboarding.confirmations.terms,
       });
 
       localStorage.setItem('nc:token', token);
