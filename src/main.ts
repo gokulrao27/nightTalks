@@ -5,6 +5,9 @@ import '@fontsource/dm-sans/300.css';
 import '@fontsource/dm-sans/400.css';
 import '@fontsource/dm-sans/500.css';
 import './styles.css';
+import { api, getToken, type WallPost as ApiWallPost, type CallRecord } from './api';
+import { connectSocket, disconnectSocket, send, on } from './socket';
+import { startCall as startRtcCall, endCall as rtcEndCall, toggleMute } from './rtc';
 
 Sentry.init({
   dsn: import.meta.env.VITE_SENTRY_DSN,
@@ -61,7 +64,7 @@ type IconName =
   | 'lock'
   | 'edit';
 
-type WallPost = { quote: string; region: string; age: string };
+type StaticWallPost = { quote: string; region: string; age: string };
 
 type SavedCall = {
   id: string;
@@ -131,7 +134,7 @@ const LINE_OPEN_MINUTE = 0;
 const LINE_CLOSE_HOUR = 2;
 const LINE_CLOSE_MINUTE = 50;
 
-const WALL_POSTS: WallPost[] = [
+const WALL_POSTS: StaticWallPost[] = [
   { quote: "I told a stranger I loved someone I've never admitted loving. Saying it out loud to nobody made it more real than anything.", region: 'Brazil', age: '2h ago' },
   { quote: "My word was 'lighter'. I didn't expect to mean it.", region: 'the UK', age: '4h ago' },
   { quote: "They said 'you're the first person I've told.' I'll carry that forever even though I'll never know their name.", region: 'Canada', age: '6h ago' },
@@ -214,12 +217,6 @@ function haptic(pattern: number | number[]): void {
   if ('vibrate' in navigator) navigator.vibrate(pattern);
 }
 
-const SEED_CALLS: SavedCall[] = [
-  { id: 'seed-1', startedAt: Date.now() - 86_400_000, durationSecs: 412, word: 'lighter' },
-  { id: 'seed-2', startedAt: Date.now() - 172_800_000, durationSecs: 588, word: 'enough' },
-  { id: 'seed-3', startedAt: Date.now() - 259_200_000, durationSecs: 600, word: null },
-];
-
 class NightCallApp {
   private readonly root: HTMLElement;
   private state: AppState;
@@ -229,6 +226,15 @@ class NightCallApp {
   private clockTimerId: number | undefined;
   private toastTimerId: number | undefined;
   private splashTimerId: number | undefined;
+
+  // Sprint 4 state
+  private currentRoomId: string | undefined;
+  private currentCallId: string | undefined;
+  private isMuted = false;
+  private socketBound = false;
+  private currentPrompt = "What's something you've been carrying alone that you wish someone knew?";
+  private apiWallPosts: ApiWallPost[] = [];
+  private wallNextCursor: string | null = null;
 
   constructor(root: HTMLElement) {
     if ('serviceWorker' in navigator) {
@@ -242,18 +248,18 @@ class NightCallApp {
     this.updateTimerDisplay();
     this.clockTimerId = window.setInterval(() => this.updateClockAndWindow(), 1_000);
     document.addEventListener('visibilitychange', () => this.handleVisibilityChange());
-    this.scheduleSplashTransition();
+    void this.scheduleSplashTransition();
   }
 
   private loadState(): AppState {
     const defaultState: AppState = {
       activeScreen: 'splash',
       onboarding: defaultOnboarding(),
-      savedWords: ['lighter', 'enough', 'free', 'present', 'seen'],
-      savedCalls: SEED_CALLS,
-      calls: 7,
+      savedWords: [],
+      savedCalls: [],
+      calls: 0,
       passesLeft: 2,
-      wallCount: 43,
+      wallCount: 0,
       tier: 'free',
       notificationsEnabled: false,
     };
@@ -555,10 +561,6 @@ class NightCallApp {
               <button class="call-action-btn call-end" data-action="cancel-call" type="button" aria-label="Cancel call">${icon('phoneOff')}</button>
               <div class="call-action-label">Cancel</div>
             </div>
-            <div class="call-action">
-              <button class="call-action-btn call-connect" data-action="connect-call" type="button" aria-label="Connect call">${icon('check')}</button>
-              <div class="call-action-label">Connect</div>
-            </div>
           </div>
           ${hasPass ? `<button class="pass-link" data-action="use-pass" type="button">Use a pass to skip this match — ${this.state.passesLeft} ${this.state.passesLeft === 1 ? 'pass' : 'passes'} left</button>` : ''}
         </div>
@@ -571,7 +573,7 @@ class NightCallApp {
       <section class="screen" data-screen="incall" aria-labelledby="incall-question">
         ${this.statusBarTemplate()}
         <div class="incall-top">
-          <h2 class="incall-qs" id="incall-question" data-autofocus tabindex="-1">"What's something you've been carrying alone that you wish someone knew?"</h2>
+          <h2 class="incall-qs" id="incall-question" data-autofocus tabindex="-1">"${this.escapeHtml(this.currentPrompt)}"</h2>
           <div class="timer-bar" aria-hidden="true"><div class="timer-fill" data-timer-fill></div></div>
           <div class="timer-text" data-timer-text aria-live="polite">6:14 remaining</div>
         </div>
@@ -583,15 +585,8 @@ class NightCallApp {
             <div class="wave-label">Your stranger is speaking...</div>
           </div>
           <aside class="incall-hint">"The best NightCalls happen when you say the thing you've never said out loud. This stranger won't remember your name. That's the point."</aside>
-          <article class="transcript-card">
-            <div class="transcript-meta">From Tokyo · Anonymous</div>
-            <p class="transcript-copy">"I quit my job today. Nobody knows yet. I feel terrified and completely free at the same time..."</p>
-          </article>
-          <article class="transcript-card transcript-card--you">
-            <div class="transcript-meta">You</div>
-            <p class="transcript-copy">"That's incredible. The terrified part is the honest part."</p>
-          </article>
         </div>
+        <button class="wall-btn wall-btn--muted" data-action="toggle-mute" type="button" aria-pressed="${this.isMuted}">${this.isMuted ? 'Unmute' : 'Mute'}</button>
         <button class="incall-end" data-action="end-call" type="button">${icon('phoneOff')} End call</button>
       </section>
     `;
@@ -618,12 +613,24 @@ class NightCallApp {
   }
 
   private wallTemplate(): string {
-    const posts = WALL_POSTS.map(({ quote, region, age }) => `
-      <article class="wall-item">
-        <p class="wall-quote">"${quote}"</p>
-        <div class="wall-meta"><span class="wall-dot" aria-hidden="true"></span>From somewhere in ${region} <span class="wall-dot" aria-hidden="true"></span> ${age}</div>
-      </article>
-    `).join('');
+    const posts = this.apiWallPosts.length > 0
+      ? this.apiWallPosts.map(({ body, country_vague, created_at }) => `
+          <article class="wall-item">
+            <p class="wall-quote">"${this.escapeHtml(body)}"</p>
+            <div class="wall-meta"><span class="wall-dot" aria-hidden="true"></span>From somewhere in ${this.escapeHtml(country_vague ?? 'the world')} <span class="wall-dot" aria-hidden="true"></span> ${this.relativeTime(created_at)}</div>
+          </article>
+        `).join('')
+      : WALL_POSTS.map(({ quote, region, age }) => `
+          <article class="wall-item">
+            <p class="wall-quote">"${quote}"</p>
+            <div class="wall-meta"><span class="wall-dot" aria-hidden="true"></span>From somewhere in ${region} <span class="wall-dot" aria-hidden="true"></span> ${age}</div>
+          </article>
+        `).join('');
+
+    const loadMore = this.wallNextCursor
+      ? `<button class="wall-btn" data-action="load-more-wall" type="button">Load more</button>`
+      : '';
+
     return `
       <section class="screen" data-screen="wall" aria-labelledby="wall-title">
         ${this.statusBarTemplate()}
@@ -631,7 +638,7 @@ class NightCallApp {
           <h2 class="wall-title" id="wall-title" data-autofocus tabindex="-1">The Wall</h2>
           <p class="wall-subtitle">Things people wish they'd said. Anonymous. Forever.</p>
         </div>
-        <div class="scroll">${posts}</div>
+        <div class="scroll">${posts}${loadMore}</div>
         ${this.bottomNavTemplate('wall')}
       </section>
     `;
@@ -812,25 +819,33 @@ class NightCallApp {
 
       if (avatar) this.selectAvatar(avatar);
       if (navTarget === 'tonight') this.setScreen(this.resolveHomeScreen());
-      if (navTarget === 'wall') this.setScreen('wall');
-      if (navTarget === 'history') this.setScreen('history');
-      if (navTarget === 'me') this.setScreen('me');
+      if (navTarget === 'wall') { this.setScreen('wall'); void this.loadWall(); }
+      if (navTarget === 'history') { this.setScreen('history'); void this.loadHistory(); }
+      if (navTarget === 'me') { this.setScreen('me'); void this.loadMe(); }
       if (action === 'welcome-next') this.setScreen('onboarding-setup');
       if (action === 'setup-next') this.handleSetupNext();
-      if (action === 'enter-nightcall') this.enterNightCall();
-      if (action === 'start-call') this.setScreen('calling');
-      if (action === 'cancel-call' || action === 'go-home') this.setScreen(this.resolveHomeScreen());
-      if (action === 'connect-call') this.startCall();
-      if (action === 'end-call') this.endCall();
-      if (action === 'save-word') this.saveWord();
-      if (action === 'open-wall') this.setScreen('wall');
+      if (action === 'enter-nightcall') void this.enterNightCall();
+      if (action === 'start-call') { this.setScreen('calling'); send('queue:join'); }
+      if (action === 'cancel-call') { send('queue:leave'); this.setScreen(this.resolveHomeScreen()); }
+      if (action === 'go-home') this.setScreen(this.resolveHomeScreen());
+      if (action === 'end-call') {
+        if (this.currentRoomId) {
+          send('queue:leave');
+          void api.calls.end(this.currentRoomId);
+        }
+        this.endCall();
+      }
+      if (action === 'toggle-mute') this.handleToggleMute();
+      if (action === 'save-word') void this.saveWord();
+      if (action === 'open-wall') void this.handleWallPost();
+      if (action === 'load-more-wall') void this.loadMoreWall();
       if (action === 'use-pass') this.usePass();
       if (action === 'upgrade') this.showToast('Premium coming soon — stay tuned 🌙');
       if (action === 'edit-timezone' || action === 'edit-alias') this.setScreen('onboarding-setup');
       if (action === 'toggle-notifications') void this.toggleNotifications();
       if (action === 'open-privacy') this.setScreen('privacy');
       if (action === 'back-to-me') this.setScreen('me');
-      if (action === 'delete-account') this.deleteAccount();
+      if (action === 'delete-account') void this.deleteAccount();
     });
 
     this.root.addEventListener('input', (event) => {
@@ -856,8 +871,41 @@ class NightCallApp {
     });
   }
 
+  private bindSocketEvents(): void {
+    if (this.socketBound) return;
+    this.socketBound = true;
+
+    on('queue:waiting', () => {
+      this.showToast('In queue — finding your stranger…');
+    });
+
+    on('queue:matched', (payload) => {
+      const { roomId, isInitiator, prompt } = payload as { roomId: string; isInitiator: boolean; prompt?: string };
+      this.currentRoomId = roomId;
+      if (prompt) this.currentPrompt = prompt;
+      this.startCall();
+      void startRtcCall(roomId, isInitiator, {
+        onConnected: () => { /* audio established */ },
+        onEnded: () => { this.endCall(); },
+        onAudioLevel: () => { /* wave bars animate via CSS */ },
+      }).catch(() => {
+        this.showToast('Could not connect — check microphone permissions');
+        this.setScreen(this.resolveHomeScreen());
+      });
+    });
+
+    on('queue:limit_reached', () => {
+      this.showToast('Daily call limit reached — try again tomorrow');
+      this.setScreen(this.resolveHomeScreen());
+    });
+
+    on('queue:closed', () => {
+      this.showToast('The line is closed right now');
+      this.setScreen(this.resolveHomeScreen());
+    });
+  }
+
   private setScreen(screen: ScreenId, options: { skipPersistence?: boolean } = {}): void {
-    // Re-render screens whose content depends on mutable state
     this.refreshScreen(screen);
 
     this.state.activeScreen = screen;
@@ -887,6 +935,8 @@ class NightCallApp {
       me: () => this.meTemplate(),
       history: () => this.historyTemplate(),
       calling: () => this.callingTemplate(),
+      incall: () => this.inCallTemplate(),
+      wall: () => this.wallTemplate(),
     };
     const template = refreshable[screen];
     if (!template) return;
@@ -898,11 +948,34 @@ class NightCallApp {
     return isLineOpen(this.state.onboarding.timezone) ? 'home-open' : 'home-closed';
   }
 
-  private scheduleSplashTransition(): void {
+  // 4a — check stored JWT on startup; skip onboarding if valid
+  private async scheduleSplashTransition(): Promise<void> {
     if (this.splashTimerId !== undefined) window.clearTimeout(this.splashTimerId);
-    this.splashTimerId = window.setTimeout(() => {
+    await new Promise<void>((resolve) => {
+      this.splashTimerId = window.setTimeout(resolve, 900);
+    });
+
+    const token = getToken();
+    if (token) {
+      try {
+        const user = await api.me.get();
+        this.state.onboarding.alias = user.pseudonym;
+        this.state.onboarding.avatar = user.avatar as IconName;
+        this.state.onboarding.timezone = user.timezone;
+        this.state.tier = user.tier;
+        this.state.onboarding.completed = true;
+        this.saveState();
+        connectSocket(token);
+        this.bindSocketEvents();
+        this.setScreen(this.resolveHomeScreen());
+      } catch {
+        localStorage.removeItem('nc:token');
+        localStorage.removeItem('nc:user');
+        this.setScreen(this.state.onboarding.completed ? this.resolveHomeScreen() : 'onboarding-welcome');
+      }
+    } else {
       this.setScreen(this.state.onboarding.completed ? this.resolveHomeScreen() : 'onboarding-welcome');
-    }, 900);
+    }
   }
 
   private selectAvatar(avatar: IconName): void {
@@ -929,26 +1002,56 @@ class NightCallApp {
     }
 
     this.saveState();
-    // Return to Me tab if editing from settings; otherwise advance onboarding
-    this.setScreen(this.state.onboarding.completed ? 'me' : 'onboarding-confirm');
+
+    if (this.state.onboarding.completed) {
+      void api.me.update({ pseudonym: alias, timezone }).catch(() => {});
+      this.setScreen('me');
+    } else {
+      this.setScreen('onboarding-confirm');
+    }
   }
 
-  private enterNightCall(): void {
+  // 4b — create anonymous account on first entry, connect socket
+  private async enterNightCall(): Promise<void> {
     if (!this.canEnterNightCall()) {
       this.showToast('Confirm all three items first...');
       return;
     }
-    this.state.onboarding.completed = true;
-    this.saveState();
-    void this.requestPushPermission();
-    this.setScreen(this.resolveHomeScreen());
+
+    try {
+      const { token, user } = await api.auth.init({
+        pseudonym: this.state.onboarding.alias || 'Anonymous',
+        avatar: this.state.onboarding.avatar,
+        timezone: this.state.onboarding.timezone,
+        consent_age: this.state.onboarding.confirmations.age,
+        consent_anon: this.state.onboarding.confirmations.privacy,
+        consent_terms: this.state.onboarding.confirmations.terms,
+      });
+
+      localStorage.setItem('nc:token', token);
+      localStorage.setItem('nc:user', JSON.stringify(user));
+
+      this.state.onboarding.completed = true;
+      this.state.onboarding.alias = user.pseudonym;
+      this.state.onboarding.avatar = user.avatar as IconName;
+      this.state.tier = user.tier;
+      this.saveState();
+
+      connectSocket(token);
+      this.bindSocketEvents();
+      void this.requestPushPermission();
+      this.setScreen(this.resolveHomeScreen());
+    } catch {
+      this.showToast('Something went wrong — try again');
+    }
   }
 
   private async requestPushPermission(): Promise<void> {
-    if (!('Notification' in window)) return;
+    if (!('Notification' in window) || !('serviceWorker' in navigator)) return;
     if (Notification.permission === 'granted') {
       this.state.notificationsEnabled = true;
       this.saveState();
+      await this.subscribeToPush().catch(() => {});
       return;
     }
     if (Notification.permission === 'denied') return;
@@ -957,7 +1060,21 @@ class NightCallApp {
       this.state.notificationsEnabled = true;
       this.saveState();
       this.showToast("We'll remind you at 1:55 AM every night 🌙");
+      await this.subscribeToPush().catch(() => {});
     }
+  }
+
+  // 4l — VAPID push subscription
+  private async subscribeToPush(): Promise<void> {
+    const vapidKey = import.meta.env.VITE_VAPID_PUBLIC_KEY;
+    if (!vapidKey) return;
+    const reg = await navigator.serviceWorker.ready;
+    if (!reg.pushManager) return;
+    const subscription = await reg.pushManager.subscribe({
+      userVisibleOnly: true,
+      applicationServerKey: vapidKey,
+    });
+    await api.push.subscribe(subscription.toJSON() as PushSubscriptionJSON);
   }
 
   private async toggleNotifications(): Promise<void> {
@@ -969,6 +1086,7 @@ class NightCallApp {
       this.state.notificationsEnabled = false;
       this.saveState();
       this.showToast('Notifications turned off');
+      await api.push.unsubscribe().catch(() => {});
     } else {
       if (Notification.permission === 'denied') {
         this.showToast('Enable notifications in your browser settings');
@@ -979,6 +1097,7 @@ class NightCallApp {
         this.state.notificationsEnabled = true;
         this.saveState();
         this.showToast("We'll remind you at 1:55 AM every night 🌙");
+        await this.subscribeToPush().catch(() => {});
       }
     }
     const notifValue = this.root.querySelector<HTMLElement>('[data-notif-value]');
@@ -1003,6 +1122,7 @@ class NightCallApp {
     if (enterButton) enterButton.disabled = !this.canEnterNightCall();
   }
 
+  // 4c — transition to incall screen and start countdown display
   private startCall(): void {
     this.callRemainingSeconds = CALL_DURATION_SECONDS;
     this.callStartedAt = Date.now();
@@ -1011,7 +1131,9 @@ class NightCallApp {
     this.updateTimerDisplay();
   }
 
+  // 4d — cleanup WebRTC and local state, navigate to postcall
   private endCall(): void {
+    rtcEndCall();
     this.stopTimer();
     haptic([100, 50, 100, 50, 200]);
 
@@ -1020,7 +1142,7 @@ class NightCallApp {
       : CALL_DURATION_SECONDS - this.callRemainingSeconds;
 
     const newCall: SavedCall = {
-      id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+      id: this.currentCallId ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`,
       startedAt: this.callStartedAt || Date.now() - durationSecs * 1_000,
       durationSecs,
       word: null,
@@ -1029,9 +1151,23 @@ class NightCallApp {
     this.state.savedCalls = [newCall, ...this.state.savedCalls].slice(0, 50);
     this.state.calls += 1;
     this.callStartedAt = 0;
+    this.currentRoomId = undefined;
+    this.currentCallId = undefined;
+    this.isMuted = false;
     this.saveState();
     this.updateStats();
     this.setScreen('postcall');
+  }
+
+  // 4e — mute/unmute microphone
+  private handleToggleMute(): void {
+    this.isMuted = !this.isMuted;
+    toggleMute(this.isMuted);
+    const btn = this.root.querySelector<HTMLButtonElement>('[data-action="toggle-mute"]');
+    if (btn) {
+      btn.textContent = this.isMuted ? 'Unmute' : 'Mute';
+      btn.setAttribute('aria-pressed', String(this.isMuted));
+    }
   }
 
   private startTimer(): void {
@@ -1060,7 +1196,8 @@ class NightCallApp {
     timerFill.style.width = `${percentage}%`;
   }
 
-  private saveWord(): void {
+  // 4f — persist word locally and send to API
+  private async saveWord(): Promise<void> {
     const input = this.root.querySelector<HTMLInputElement>('[data-word-input]');
     const word = input?.value.trim().replace(/\s+/g, ' ');
 
@@ -1072,7 +1209,12 @@ class NightCallApp {
 
     this.state.savedWords = [word, ...this.state.savedWords].slice(0, 25);
     const latest = this.state.savedCalls[0];
-    if (latest?.word === null) latest.word = word;
+    if (latest?.word === null) {
+      latest.word = word;
+      if (latest.id && !latest.id.startsWith('seed-')) {
+        void api.words.save(latest.id, word);
+      }
+    }
 
     this.saveState();
     if (input) input.value = '';
@@ -1081,12 +1223,85 @@ class NightCallApp {
     window.setTimeout(() => this.setScreen(this.resolveHomeScreen()), 1_500);
   }
 
+  // 4g — prompt for wall post text and send to API
+  private async handleWallPost(): Promise<void> {
+    const body = window.prompt('Share something to The Wall (max 500 characters):');
+    if (!body?.trim()) return;
+    if (body.trim().length > 500) {
+      this.showToast('Too long — keep it under 500 characters');
+      return;
+    }
+    try {
+      await api.wall.post(body.trim());
+      this.showToast('Posted to The Wall 🌙');
+      this.setScreen('wall');
+      void this.loadWall();
+    } catch {
+      this.showToast('Could not post — try again');
+    }
+  }
+
+  // 4h — load wall posts from API and re-render
+  private async loadWall(): Promise<void> {
+    try {
+      const { posts, nextCursor } = await api.wall.list();
+      this.apiWallPosts = posts;
+      this.wallNextCursor = nextCursor;
+      if (this.state.activeScreen === 'wall') {
+        this.setScreen('wall', { skipPersistence: true });
+      }
+    } catch { /* keep showing existing posts */ }
+  }
+
+  private async loadMoreWall(): Promise<void> {
+    if (!this.wallNextCursor) return;
+    try {
+      const { posts, nextCursor } = await api.wall.list(this.wallNextCursor);
+      this.apiWallPosts = [...this.apiWallPosts, ...posts];
+      this.wallNextCursor = nextCursor;
+      if (this.state.activeScreen === 'wall') {
+        this.setScreen('wall', { skipPersistence: true });
+      }
+    } catch { /* ignore */ }
+  }
+
+  // 4i — load call history from API
+  private async loadHistory(): Promise<void> {
+    try {
+      const { calls } = await api.calls.history();
+      this.state.savedCalls = calls.map((c: CallRecord) => ({
+        id: c.id,
+        startedAt: new Date(c.started_at).getTime(),
+        durationSecs: c.duration_secs,
+        word: c.word,
+      }));
+      if (this.state.activeScreen === 'history') {
+        this.setScreen('history', { skipPersistence: true });
+      }
+    } catch { /* keep showing existing */ }
+  }
+
+  // 4j — refresh profile from API
+  private async loadMe(): Promise<void> {
+    try {
+      const user = await api.me.get();
+      this.state.onboarding.alias = user.pseudonym;
+      this.state.onboarding.avatar = user.avatar as IconName;
+      this.state.onboarding.timezone = user.timezone;
+      this.state.tier = user.tier;
+      if (this.state.activeScreen === 'me') {
+        this.setScreen('me', { skipPersistence: true });
+      }
+    } catch { /* keep showing existing */ }
+  }
+
   private usePass(): void {
     if (this.state.passesLeft <= 0) return;
     this.state.passesLeft -= 1;
     this.saveState();
     haptic([40, 20, 40]);
     this.showToast('Pass used — finding another stranger…');
+    send('queue:pass');
 
     const passLink = this.root.querySelector<HTMLButtonElement>('[data-action="use-pass"]');
     if (passLink) {
@@ -1098,12 +1313,16 @@ class NightCallApp {
     }
   }
 
-  private deleteAccount(): void {
+  // 4k — delete account locally and on server
+  private async deleteAccount(): Promise<void> {
     const confirmed = window.confirm(
       'Delete your NightCall account?\n\nThis removes your alias, avatar, call history, and saved words from this device. This cannot be undone.',
     );
     if (!confirmed) return;
-    window.localStorage.removeItem(LOCAL_STORAGE_KEY);
+
+    await api.me.delete().catch(() => {});
+    disconnectSocket();
+    localStorage.clear();
     this.showToast('Account deleted.');
     window.setTimeout(() => location.reload(), 1_500);
   }
@@ -1121,6 +1340,14 @@ class NightCallApp {
     toast.classList.add('show');
     if (this.toastTimerId !== undefined) window.clearTimeout(this.toastTimerId);
     this.toastTimerId = window.setTimeout(() => toast.classList.remove('show'), 2_500);
+  }
+
+  private relativeTime(isoString: string): string {
+    const diff = Date.now() - new Date(isoString).getTime();
+    const h = Math.floor(diff / 3_600_000);
+    if (h < 1) return 'just now';
+    if (h < 24) return `${h}h ago`;
+    return `${Math.floor(h / 24)}d ago`;
   }
 
   private updateClockAndWindow(): void {
@@ -1150,7 +1377,6 @@ class NightCallApp {
     const callBtnCountdown = this.root.querySelector<HTMLElement>('[data-call-btn-countdown]');
     if (callBtnCountdown) callBtnCountdown.textContent = formatDuration(openSecs * 1_000);
 
-    // Announce to screen readers on each minute boundary
     const announceEl = this.root.querySelector<HTMLElement>('[data-countdown-announce]');
     if (announceEl && openSecs > 0 && openSecs % 60 === 0) {
       const h = Math.floor(openSecs / 3600);
