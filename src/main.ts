@@ -318,13 +318,13 @@ class NightCallApp {
     this.syncOnboardingControls();
   }
 
-  private statusBarTemplate(time = '2:00 AM', withBattery = false): string {
+  private statusBarTemplate(): string {
     return `
       <div class="sbar">
-        <span class="sbar-time" data-live-clock>${time}</span>
+        <span class="sbar-time" data-live-clock></span>
         <div class="sbar-icons" aria-hidden="true">
           ${icon('wifi')}
-          ${withBattery ? icon('battery') : ''}
+          ${icon('battery')}
         </div>
       </div>
     `;
@@ -356,7 +356,7 @@ class NightCallApp {
   private onboardingWelcomeTemplate(): string {
     return `
       <section class="screen" data-screen="onboarding-welcome" aria-labelledby="welcome-title">
-        ${this.statusBarTemplate('2:00 AM', true)}
+        ${this.statusBarTemplate()}
         ${this.stepsTemplate(1)}
         <div class="ob-scroll">
           <h2 class="ob-title ob-title--large" id="welcome-title">The line opens<br />at midnight.</h2>
@@ -493,7 +493,7 @@ class NightCallApp {
   private homeClosedTemplate(): string {
     return `
       <section class="screen" data-screen="home-closed" aria-labelledby="closed-title">
-        ${this.statusBarTemplate('11:48 PM', true)}
+        ${this.statusBarTemplate()}
         <div class="scroll">
           <div class="nc-hero nc-hero--compact">
             <h1 class="nc-logo" id="closed-title">Night<span>Call</span></h1>
@@ -525,7 +525,7 @@ class NightCallApp {
   private homeOpenTemplate(): string {
     return `
       <section class="screen" data-screen="home-open" aria-labelledby="open-title">
-        ${this.statusBarTemplate('2:17 AM', true)}
+        ${this.statusBarTemplate()}
         <div class="scroll">
           <div class="nc-hero nc-hero--compact">
             <h1 class="nc-logo" id="open-title">Night<span>Call</span></h1>
@@ -609,7 +609,7 @@ class NightCallApp {
   private inCallTemplate(): string {
     return `
       <section class="screen" data-screen="incall" aria-labelledby="incall-question">
-        ${this.statusBarTemplate('2:03 AM')}
+        ${this.statusBarTemplate()}
         <div class="incall-top">
           <h2 class="incall-qs" id="incall-question">“What's something you've been carrying alone that you wish someone knew?”</h2>
           <div class="timer-bar" aria-hidden="true"><div class="timer-fill" data-timer-fill></div></div>
@@ -640,7 +640,7 @@ class NightCallApp {
   private postCallTemplate(): string {
     return `
       <section class="screen" data-screen="postcall" aria-labelledby="post-title">
-        ${this.statusBarTemplate('2:13 AM')}
+        ${this.statusBarTemplate()}
         <div class="post-scroll">
           <div class="post-emoji" aria-hidden="true">🌌</div>
           <h2 class="post-title" id="post-title">It's over.</h2>
