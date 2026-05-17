@@ -1,4 +1,5 @@
 import * as Sentry from '@sentry/browser';
+import { inject } from '@vercel/analytics';
 import '@fontsource/dm-serif-display/400.css';
 import '@fontsource/dm-serif-display/400-italic.css';
 import '@fontsource/dm-sans/300.css';
@@ -15,6 +16,8 @@ Sentry.init({
   enabled: import.meta.env.PROD,
   tracesSampleRate: 0.1,
 });
+
+inject();
 
 type ScreenId =
   | 'splash'
