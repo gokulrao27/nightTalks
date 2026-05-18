@@ -6,7 +6,7 @@ import '@fontsource/dm-sans/300.css';
 import '@fontsource/dm-sans/400.css';
 import '@fontsource/dm-sans/500.css';
 import './styles.css';
-import { api, getToken, type WallPost as ApiWallPost, type CallRecord } from './api';
+import { api, getToken, testConnection, type WallPost as ApiWallPost, type CallRecord } from './api';
 import { connectSocket, disconnectSocket, send, on } from './socket';
 import { startCall as startRtcCall, endCall as rtcEndCall, toggleMute } from './rtc';
 
@@ -2158,3 +2158,36 @@ class NightCallApp {
 const appRoot = document.querySelector<HTMLElement>('#app');
 if (!appRoot) throw new Error('NightCall mount node not found.');
 new NightCallApp(appRoot);
+
+// Startup connection test — results visible in browser DevTools Console
+testConnection().then((ok) => {
+  if (!ok) console.error('[STARTUP] Backend unreachable. Check VITE_API_URL:', import.meta.env.VITE_API_URL);
+}).catch(() => {});
+
+// Debug diagnostic — accessible at /#debug
+if (window.location.hash === '#debug') {
+  void (async () => {
+    const apiUrl = import.meta.env.VITE_API_URL as string;
+    const results: Record<string, unknown> = {
+      apiUrl,
+      wsUrl: import.meta.env.VITE_WS_URL,
+      token: !!localStorage.getItem('nc:token'),
+    };
+    try {
+      const ping = await fetch(`${apiUrl}/ping`);
+      results.backendPing = ping.ok ? await ping.json() as unknown : `HTTP ${ping.status}`;
+    } catch (e) { results.backendPing = String(e); }
+    try {
+      const ice = await fetch(`${apiUrl}/call/ice-config`);
+      if (ice.ok) {
+        const servers = await ice.json() as unknown[];
+        results.iceConfig = `${servers.length} servers`;
+        results.iceServers = servers;
+      } else {
+        results.iceConfig = `HTTP ${ice.status}`;
+      }
+    } catch (e) { results.iceConfig = String(e); }
+    console.table(results);
+    alert(JSON.stringify(results, null, 2));
+  })();
+}

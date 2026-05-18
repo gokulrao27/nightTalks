@@ -13,8 +13,28 @@ let remoteAudio: HTMLAudioElement | null = null;
 let audioCtx: AudioContext | null = null;
 let levelTimer: number | undefined;
 
+const STATIC_ICE_SERVERS: RTCIceServer[] = [
+  { urls: 'stun:stun.relay.metered.ca:80' },
+  { urls: 'turn:global.relay.metered.ca:80',                 username: 'c40ac051f966a4ccfd724770', credential: 'PjKEkcJ7HOgdX6Nx' },
+  { urls: 'turn:global.relay.metered.ca:80?transport=tcp',   username: 'c40ac051f966a4ccfd724770', credential: 'PjKEkcJ7HOgdX6Nx' },
+  { urls: 'turn:global.relay.metered.ca:443',                username: 'c40ac051f966a4ccfd724770', credential: 'PjKEkcJ7HOgdX6Nx' },
+  { urls: 'turns:global.relay.metered.ca:443?transport=tcp', username: 'c40ac051f966a4ccfd724770', credential: 'PjKEkcJ7HOgdX6Nx' },
+];
+
 export async function startCall(roomId: string, isInitiator: boolean, callbacks: CallCallbacks): Promise<void> {
-  const { iceServers } = await api.calls.iceConfig();
+  let iceServers: RTCIceServer[] = [];
+  try {
+    const servers = await api.calls.iceConfig();
+    if (Array.isArray(servers) && servers.length > 0) {
+      iceServers = servers;
+      console.info('[RTC] ICE servers loaded:', servers.length, 'entries');
+    } else {
+      throw new Error('Empty ICE config from backend');
+    }
+  } catch (e) {
+    console.warn('[RTC] Backend ICE config failed, using static fallback:', e);
+    iceServers = STATIC_ICE_SERVERS;
+  }
 
   localStream = await navigator.mediaDevices.getUserMedia({
     audio: {
@@ -26,7 +46,7 @@ export async function startCall(roomId: string, isInitiator: boolean, callbacks:
     video: false,
   });
 
-  pc = new RTCPeerConnection({ iceServers });
+  pc = new RTCPeerConnection({ iceServers, iceCandidatePoolSize: 10 });
   localStream.getTracks().forEach((track) => pc!.addTrack(track, localStream!));
 
   audioCtx = new AudioContext();

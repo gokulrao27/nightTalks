@@ -16,19 +16,33 @@ function connect(): void {
   if (ws && ws.readyState < WebSocket.CLOSING) ws.close(4000);
   ws = new WebSocket(`${WS_URL}?token=${encodeURIComponent(currentToken)}`);
 
+  ws.onopen = () => {
+    console.info('[WS] Connected to', WS_URL);
+    window.clearTimeout(reconnectTimer);
+    reconnectTimer = undefined;
+  };
+
   ws.onmessage = (event) => {
     try {
-      const { type, payload } = JSON.parse(event.data as string) as { type: string; payload: unknown };
-      handlers.get(type)?.forEach((h) => h(payload));
+      const msg = JSON.parse(event.data as string) as { type: string; payload: unknown };
+      if (msg.type === 'pong') { console.info('[WS] Ping-pong confirmed'); return; }
+      handlers.get(msg.type)?.forEach((h) => h(msg.payload));
     } catch { /* ignore malformed */ }
   };
 
   ws.onclose = (event) => {
-    if (event.code === 4001) return;
-    reconnectTimer = window.setTimeout(() => connect(), 3_000);
+    console.warn('[WS] Closed — code:', event.code, event.reason || '');
+    if (event.code === 4001) {
+      console.error('[WS] Auth failed — JWT may be expired');
+      return;
+    }
+    if (currentToken) reconnectTimer = window.setTimeout(() => connect(), 3_000);
   };
 
-  ws.onerror = () => { ws?.close(); };
+  ws.onerror = () => {
+    console.error('[WS] Error — check VITE_WS_URL and backend CORS');
+    ws?.close();
+  };
 }
 
 export function disconnectSocket(): void {

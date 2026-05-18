@@ -39,7 +39,26 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
   }
 }
 
+export async function testConnection(): Promise<boolean> {
+  try {
+    const res = await fetch(`${import.meta.env.VITE_API_URL as string}/ping`);
+    if (!res.ok) { console.error('[API] Backend unreachable — status', res.status); return false; }
+    const data = await res.json() as unknown;
+    console.info('[API] Connected to backend:', data);
+    return true;
+  } catch (e) {
+    console.error('[API] Backend connection failed:', e);
+    return false;
+  }
+}
+
 export const api = {
+  system: {
+    async ping(): Promise<{ ok: boolean; turnConfigured: boolean; ts: string }> {
+      return request('GET', '/ping');
+    },
+  },
+
   auth: {
     async init(payload: {
       pseudonym: string;
@@ -80,7 +99,7 @@ export const api = {
       const qs = cursor ? `?cursor=${encodeURIComponent(cursor)}` : '';
       return request('GET', `/call/history${qs}`);
     },
-    async iceConfig(): Promise<{ iceServers: RTCIceServer[] }> {
+    async iceConfig(): Promise<RTCIceServer[]> {
       return request('GET', '/call/ice-config');
     },
     async end(roomId: string): Promise<void> {
