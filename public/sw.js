@@ -7,10 +7,23 @@ const STATIC_ASSETS = [
   '/icon-512.png',
 ];
 
-self.addEventListener('install', (event) => {
-  event.waitUntil(
-    caches.open(CACHE_NAME).then((cache) => cache.addAll(STATIC_ASSETS)).then(() => self.skipWaiting()),
+self.addEventListener('install', e => {
+  e.waitUntil(
+    caches.open(CACHE_NAME).then(c =>
+      // Use individual try-catch so one failure doesn't break the whole SW
+      Promise.allSettled([
+        c.add('/'),
+        c.add('/index.html'),
+      ]).then(results => {
+        results.forEach((r, i) => {
+          if (r.status === 'rejected') {
+            console.warn('[SW] Failed to cache item', i, r.reason);
+          }
+        });
+      })
+    )
   );
+  self.skipWaiting();
 });
 
 self.addEventListener('activate', (event) => {
