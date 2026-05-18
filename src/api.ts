@@ -116,6 +116,7 @@ export interface User {
   avatar: string;
   timezone: string;
   tier: 'free' | 'premium';
+  streak?: number;
 }
 
 export interface WallPost {

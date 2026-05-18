@@ -26,9 +26,12 @@ type ScreenId =
   | 'onboarding-confirm'
   | 'home-closed'
   | 'home-open'
+  | 'confess-before-call'
   | 'calling'
+  | 'connecting'
   | 'incall'
   | 'postcall'
+  | 'confession-reveal'
   | 'wall'
   | 'history'
   | 'me'
@@ -154,6 +157,28 @@ const TIMEZONES = [
   { group: 'Latin America', zones: [{ value: 'America/Sao_Paulo', label: 'Brazil — BRT (UTC -3)' }, { value: 'America/Mexico_City', label: 'Mexico — CST (UTC -6)' }] },
 ];
 
+const STREAK_TIERS = [
+  { min: 0, label: 'New voice', color: '#4a4a60' },
+  { min: 3, label: 'Night owl', color: '#6b6b80' },
+  { min: 7, label: 'Midnight regular', color: '#7c6cfa' },
+  { min: 14, label: 'Insomniac', color: '#a89de0' },
+  { min: 30, label: 'Night wanderer', color: '#c4b8f0' },
+  { min: 60, label: 'Phantom caller', color: '#f0c0e0' },
+  { min: 100, label: 'NightCall legend', color: '#ffd700' },
+];
+
+const CONFESSION_QUESTIONS = [
+  "What's something you've been carrying alone that you wish someone knew?",
+  "What would you do if you weren't afraid?",
+  "What's the last thing you almost said but didn't?",
+  "What's something about yourself you've never told anyone?",
+  "What's the one thing keeping you awake tonight?",
+];
+
+function getStreakTier(streak: number): typeof STREAK_TIERS[number] {
+  return [...STREAK_TIERS].reverse().find((t) => streak >= t.min) ?? STREAK_TIERS[0];
+}
+
 function icon(name: IconName, className = ''): string {
   const classes = ['icon', className].filter(Boolean).join(' ');
   return `<svg class="${classes}" viewBox="0 0 24 24" aria-hidden="true" focusable="false">${ICON_PATHS[name]}</svg>`;
@@ -238,6 +263,11 @@ class NightCallApp {
   private currentPrompt = "What's something you've been carrying alone that you wish someone knew?";
   private apiWallPosts: ApiWallPost[] = [];
   private wallNextCursor: string | null = null;
+  private pendingConfession: { question: string; answer: string } | null = null;
+  private pendingConfessionQuestion = CONFESSION_QUESTIONS[0];
+  private connectingTimerId: number | undefined;
+  private userStreak = 0;
+  private reportedUserId: string | undefined;
 
   constructor(root: HTMLElement) {
     if ('serviceWorker' in navigator) {
@@ -321,13 +351,30 @@ class NightCallApp {
           ${this.onboardingConfirmTemplate()}
           ${this.homeClosedTemplate()}
           ${this.homeOpenTemplate()}
+          ${this.confessBeforeCallTemplate()}
           ${this.callingTemplate()}
+          ${this.connectingTemplate()}
           ${this.inCallTemplate()}
           ${this.postCallTemplate()}
+          ${this.confessionRevealTemplate()}
           ${this.wallTemplate()}
           ${this.historyTemplate()}
           ${this.meTemplate()}
           ${this.privacyTemplate()}
+          <div class="bottom-sheet" data-report-sheet role="dialog" aria-labelledby="report-sheet-title" aria-modal="true">
+            <div class="sheet-handle"></div>
+            <h3 class="sheet-title" id="report-sheet-title">Report this caller</h3>
+            <div class="reason-list">
+              <label class="reason-row"><input type="radio" name="reason" value="inappropriate" /> Inappropriate behavior</label>
+              <label class="reason-row"><input type="radio" name="reason" value="harassment" /> Harassment</label>
+              <label class="reason-row"><input type="radio" name="reason" value="hate_speech" /> Hate speech</label>
+              <label class="reason-row"><input type="radio" name="reason" value="underage" /> Possibly underage</label>
+              <label class="reason-row"><input type="radio" name="reason" value="other" /> Other</label>
+            </div>
+            <textarea class="confession-textarea" data-other-text placeholder="Describe what happened…" rows="3" maxlength="300" style="display:none"></textarea>
+            <button class="post-btn" data-action="submit-report" type="button">Submit &amp; end call</button>
+            <button class="wall-btn wall-btn--muted" data-action="close-report" type="button">Cancel</button>
+          </div>
         </div>
       </section>
     `;
@@ -493,6 +540,7 @@ class NightCallApp {
             <span class="btn-countdown-time" data-call-btn-countdown>—</span>
           </button>
           ${this.statsTemplate('closed')}
+          ${this.streakCardTemplate()}
           <article class="wall-item">
             <div class="quote-label">From The Wall · last night</div>
             <p class="wall-quote">"My word was 'lighter'. I didn't expect to mean it."</p>
@@ -528,6 +576,7 @@ class NightCallApp {
           </div>
           <button class="nc-call-btn" data-action="start-call" type="button">${icon('phone')} Call a Stranger</button>
           ${this.statsTemplate('open')}
+          ${this.streakCardTemplate()}
           <article class="wall-item">
             <p class="wall-quote">"I told a stranger I loved someone I've never admitted loving. Saying it out loud made it more real than anything."</p>
             <div class="wall-meta"><span class="wall-dot" aria-hidden="true"></span>From somewhere in Brazil <span class="wall-dot" aria-hidden="true"></span> 2h ago</div>
@@ -590,6 +639,7 @@ class NightCallApp {
           <aside class="incall-hint">"The best NightCalls happen when you say the thing you've never said out loud. This stranger won't remember your name. That's the point."</aside>
         </div>
         <button class="wall-btn wall-btn--muted" data-action="toggle-mute" type="button" aria-pressed="${this.isMuted}">${this.isMuted ? 'Unmute' : 'Mute'}</button>
+        <button class="wall-btn wall-btn--muted" data-action="report-call" type="button">Report caller</button>
         <button class="incall-end" data-action="end-call" type="button">${icon('phoneOff')} End call</button>
       </section>
     `;
@@ -676,7 +726,7 @@ class NightCallApp {
     ` : '';
 
     const callItems = calls.length === 0
-      ? `<div class="history-empty">"Your first call is tonight."</div>`
+      ? this.emptyState('🌙', 'No calls yet', 'Your first call is tonight. The line opens at 2 AM.', { label: 'Go to tonight', action: 'go-home' })
       : calls.map((call) => {
           const dateStr = new Intl.DateTimeFormat('en-US', {
             timeZone: timezone,
@@ -828,6 +878,140 @@ class NightCallApp {
     `;
   }
 
+  private confessBeforeCallTemplate(): string {
+    return `
+      <section class="screen" data-screen="confess-before-call" aria-labelledby="confess-title">
+        ${this.statusBarTemplate()}
+        <div class="confession-sheet">
+          <div class="confession-header">
+            <h2 class="confession-title" id="confess-title" data-autofocus tabindex="-1">Before the call</h2>
+            <p class="confession-sub">One honest thing. Anonymous. Gone after tonight.</p>
+          </div>
+          <p class="confession-q">"${this.escapeHtml(this.pendingConfessionQuestion)}"</p>
+          <div class="confession-input-wrap">
+            <textarea class="confession-textarea" data-confession-input placeholder="Say it here…" maxlength="140" rows="4"></textarea>
+            <div class="char-counter"><span data-char-count>0</span>/140</div>
+          </div>
+          <div class="confession-actions">
+            <button class="ob-btn" data-action="start-call-with-confession" type="button" disabled data-confession-submit>Continue to call</button>
+            <button class="wall-btn wall-btn--muted" data-action="skip-confession" type="button">Skip this →</button>
+          </div>
+        </div>
+      </section>
+    `;
+  }
+
+  private connectingTemplate(): string {
+    return `
+      <section class="screen" data-screen="connecting" aria-labelledby="connecting-title">
+        <div class="connecting-screen">
+          <div class="connecting-rings" aria-hidden="true">
+            <div class="ring-2"></div>
+            <div class="ring-1"></div>
+            <div class="connecting-emoji">🌙</div>
+          </div>
+          <div class="connecting-label">CONNECTED</div>
+          <h2 class="connecting-title" id="connecting-title" data-autofocus tabindex="-1">Your stranger is on the line.</h2>
+        </div>
+      </section>
+    `;
+  }
+
+  private confessionRevealTemplate(): string {
+    const pc = this.pendingConfession;
+    return `
+      <section class="screen" data-screen="confession-reveal" aria-labelledby="reveal-title">
+        ${this.statusBarTemplate()}
+        <div class="reveal-scroll">
+          <h2 class="reveal-title" id="reveal-title" data-autofocus tabindex="-1">What you both carried.</h2>
+          <p class="reveal-sub">Anonymous. Gone after tonight.</p>
+          <div class="reveal-cards">
+            <article class="reveal-card reveal-card--theirs">
+              <div class="reveal-card-label">Their confession</div>
+              ${pc ? `<p class="reveal-card-q">"${this.escapeHtml(pc.question)}"</p>` : ''}
+              <p class="reveal-card-answer">…</p>
+            </article>
+            <article class="reveal-card reveal-card--mine">
+              <div class="reveal-card-label">Yours</div>
+              ${pc ? `<p class="reveal-card-q">"${this.escapeHtml(pc.question)}"</p>` : ''}
+              <p class="reveal-card-answer">${pc?.answer ? `"${this.escapeHtml(pc.answer)}"` : '(skipped)'}</p>
+            </article>
+          </div>
+          ${pc?.answer ? `<button class="wall-btn" data-action="share-confession-to-wall" type="button">Share to The Wall</button>` : ''}
+          <button class="post-btn" data-action="close-confession-reveal" type="button">Continue →</button>
+        </div>
+      </section>
+    `;
+  }
+
+  private streakCardTemplate(): string {
+    const streak = this.userStreak;
+    let tier = STREAK_TIERS[0];
+    let tierIdx = 0;
+    for (let i = 0; i < STREAK_TIERS.length; i++) {
+      if (streak >= STREAK_TIERS[i].min) { tier = STREAK_TIERS[i]; tierIdx = i; }
+    }
+    const nextTier = STREAK_TIERS[tierIdx + 1];
+    const progressPct = nextTier
+      ? Math.min(100, Math.round(((streak - tier.min) / (nextTier.min - tier.min)) * 100))
+      : 100;
+    return `
+      <div class="streak-card">
+        <div class="streak-left">
+          <div class="streak-count">${streak}</div>
+          <div class="streak-label">night${streak !== 1 ? 's' : ''}</div>
+        </div>
+        <div class="streak-right">
+          <div class="streak-badge" style="color:${tier.color}">${tier.label}</div>
+          <div class="streak-progress-bar"><div class="streak-fill" style="width:${progressPct}%;background:${tier.color}"></div></div>
+          ${nextTier ? `<div class="streak-next">${nextTier.min - streak} more to ${nextTier.label}</div>` : '<div class="streak-next">Maximum tier reached</div>'}
+        </div>
+      </div>
+    `;
+  }
+
+  private emptyState(emojiIcon: string, title: string, body: string, cta?: { label: string; action: string }): string {
+    return `
+      <div class="empty-state">
+        <div class="empty-icon">${emojiIcon}</div>
+        <div class="empty-title">${title}</div>
+        <div class="empty-body">${body}</div>
+        ${cta ? `<button class="empty-cta" data-action="${cta.action}" type="button">${cta.label}</button>` : ''}
+      </div>
+    `;
+  }
+
+  private showReportSheet(): void {
+    const sheet = this.root.querySelector<HTMLElement>('[data-report-sheet]');
+    if (sheet) sheet.classList.add('open');
+  }
+
+  private closeReportSheet(): void {
+    const sheet = this.root.querySelector<HTMLElement>('[data-report-sheet]');
+    if (sheet) sheet.classList.remove('open');
+  }
+
+  private async submitReport(): Promise<void> {
+    const sheet = this.root.querySelector<HTMLElement>('[data-report-sheet]');
+    if (!sheet) return;
+    const checked = sheet.querySelector<HTMLInputElement>('input[name="reason"]:checked');
+    if (!checked) { this.showToast('Select a reason first'); return; }
+    const reason = checked.value;
+    const otherText = (sheet.querySelector<HTMLTextAreaElement>('[data-other-text]')?.value ?? '').trim();
+    const finalReason = reason === 'other' && otherText ? `other: ${otherText}` : reason;
+    const reportedId = this.reportedUserId ?? 'unknown';
+    const callId = this.currentCallId ?? this.currentRoomId ?? 'unknown';
+    try {
+      await api.reports.send(reportedId, callId, finalReason);
+    } catch { /* ignore — report is best-effort */ }
+    this.closeReportSheet();
+    if (this.currentRoomId) {
+      send('queue:leave');
+      void api.calls.end(this.currentRoomId);
+    }
+    this.endCall();
+  }
+
   private bindEvents(): void {
     this.root.addEventListener('click', (event) => {
       const button = (event.target as HTMLElement).closest<HTMLButtonElement>('button');
@@ -845,8 +1029,41 @@ class NightCallApp {
       if (action === 'welcome-next') this.setScreen('onboarding-setup');
       if (action === 'setup-next') this.handleSetupNext();
       if (action === 'enter-nightcall') void this.enterNightCall();
-      if (action === 'start-call') { this.setScreen('calling'); send('queue:join'); }
-      if (action === 'cancel-call') { send('queue:leave'); this.setScreen(this.resolveHomeScreen()); }
+      if (action === 'start-call') {
+        this.pendingConfessionQuestion = CONFESSION_QUESTIONS[Math.floor(Math.random() * CONFESSION_QUESTIONS.length)];
+        this.pendingConfession = null;
+        this.setScreen('confess-before-call');
+      }
+      if (action === 'skip-confession') { this.pendingConfession = null; this.setScreen('calling'); send('queue:join'); }
+      if (action === 'start-call-with-confession') {
+        const textarea = this.root.querySelector<HTMLTextAreaElement>('[data-confession-input]');
+        const answer = textarea?.value.trim() ?? '';
+        if (answer.length >= 10) {
+          this.pendingConfession = { question: this.pendingConfessionQuestion, answer };
+        }
+        this.setScreen('calling');
+        send('queue:join');
+      }
+      if (action === 'close-confession-reveal') { this.pendingConfession = null; this.setScreen('postcall'); }
+      if (action === 'share-confession-to-wall') {
+        if (this.pendingConfession?.answer) {
+          void api.wall.post(this.pendingConfession.answer).then(() => {
+            this.showToast('Shared to The Wall 🌙');
+          }).catch(() => {
+            this.showToast('Could not share — try again');
+          });
+        }
+        this.pendingConfession = null;
+        this.setScreen('postcall');
+      }
+      if (action === 'report-call') this.showReportSheet();
+      if (action === 'submit-report') void this.submitReport();
+      if (action === 'close-report') this.closeReportSheet();
+      if (action === 'cancel-call') {
+        if (this.connectingTimerId !== undefined) { window.clearTimeout(this.connectingTimerId); this.connectingTimerId = undefined; }
+        send('queue:leave');
+        this.setScreen(this.resolveHomeScreen());
+      }
       if (action === 'go-home') this.setScreen(this.resolveHomeScreen());
       if (action === 'end-call') {
         if (this.currentRoomId) {
@@ -870,10 +1087,17 @@ class NightCallApp {
     });
 
     this.root.addEventListener('input', (event) => {
-      const target = event.target as HTMLInputElement | HTMLSelectElement;
+      const target = event.target as HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement;
       if (target.matches('[data-alias-input]')) {
         this.state.onboarding.alias = target.value;
         this.saveState();
+      }
+      if (target.matches('[data-confession-input]')) {
+        const len = (target as HTMLTextAreaElement).value.length;
+        const counter = this.root.querySelector<HTMLElement>('[data-char-count]');
+        if (counter) counter.textContent = String(len);
+        const submitBtn = this.root.querySelector<HTMLButtonElement>('[data-confession-submit]');
+        if (submitBtn) submitBtn.disabled = len < 10;
       }
     });
 
@@ -888,6 +1112,10 @@ class NightCallApp {
         this.state.onboarding.confirmations[confirmation] = (target as HTMLInputElement).checked;
         this.saveState();
         this.syncConfirmButton();
+      }
+      if ((target as HTMLInputElement).name === 'reason') {
+        const otherEl = this.root.querySelector<HTMLElement>('[data-other-text]');
+        if (otherEl) otherEl.style.display = (target as HTMLInputElement).value === 'other' ? 'block' : 'none';
       }
     });
   }
@@ -904,15 +1132,20 @@ class NightCallApp {
       const { roomId, isInitiator, prompt } = payload as { roomId: string; isInitiator: boolean; prompt?: string };
       this.currentRoomId = roomId;
       if (prompt) this.currentPrompt = prompt;
-      this.startCall();
+      this.setScreen('connecting');
       void startRtcCall(roomId, isInitiator, {
         onConnected: () => { /* audio established */ },
         onEnded: () => { this.endCall(); },
         onAudioLevel: () => { /* wave bars animate via CSS */ },
       }).catch(() => {
+        if (this.connectingTimerId !== undefined) { window.clearTimeout(this.connectingTimerId); this.connectingTimerId = undefined; }
         this.showToast('Could not connect — check microphone permissions');
         this.setScreen(this.resolveHomeScreen());
       });
+      this.connectingTimerId = window.setTimeout(() => {
+        this.connectingTimerId = undefined;
+        this.startCall();
+      }, 2500);
     });
 
     on('queue:limit_reached', () => {
@@ -958,6 +1191,8 @@ class NightCallApp {
       calling: () => this.callingTemplate(),
       incall: () => this.inCallTemplate(),
       wall: () => this.wallTemplate(),
+      'confess-before-call': () => this.confessBeforeCallTemplate(),
+      'confession-reveal': () => this.confessionRevealTemplate(),
     };
     const template = refreshable[screen];
     if (!template) return;
@@ -984,6 +1219,7 @@ class NightCallApp {
         this.state.onboarding.avatar = user.avatar as IconName;
         this.state.onboarding.timezone = user.timezone;
         this.state.tier = user.tier;
+        if (user.streak !== undefined) this.userStreak = user.streak;
         this.state.onboarding.completed = true;
         this.saveState();
         connectSocket(token);
@@ -1164,10 +1400,11 @@ class NightCallApp {
     this.updateTimerDisplay();
   }
 
-  // 4d — cleanup WebRTC and local state, navigate to postcall
+  // 4d — cleanup WebRTC and local state, navigate to postcall or confession-reveal
   private endCall(): void {
     rtcEndCall();
     this.stopTimer();
+    if (this.connectingTimerId !== undefined) { window.clearTimeout(this.connectingTimerId); this.connectingTimerId = undefined; }
     haptic([100, 50, 100, 50, 200]);
 
     const durationSecs = this.callStartedAt > 0
@@ -1189,7 +1426,11 @@ class NightCallApp {
     this.isMuted = false;
     this.saveState();
     this.updateStats();
-    this.setScreen('postcall');
+    if (this.pendingConfession) {
+      this.setScreen('confession-reveal');
+    } else {
+      this.setScreen('postcall');
+    }
   }
 
   // 4e — mute/unmute microphone
@@ -1227,6 +1468,13 @@ class NightCallApp {
     const percentage = Math.round((this.callRemainingSeconds / CALL_DURATION_SECONDS) * 100);
     timerText.textContent = `${minutes}:${seconds} remaining`;
     timerFill.style.width = `${percentage}%`;
+    timerText.classList.remove('timer-text--amber', 'timer-text--red');
+    if (this.callRemainingSeconds <= 60) {
+      timerText.classList.add('timer-text--red');
+      if (this.callRemainingSeconds === 60) haptic([100, 50, 100]);
+    } else if (this.callRemainingSeconds <= 180) {
+      timerText.classList.add('timer-text--amber');
+    }
   }
 
   // 4f — persist word locally and send to API
@@ -1360,6 +1608,7 @@ class NightCallApp {
       this.state.onboarding.avatar = user.avatar as IconName;
       this.state.onboarding.timezone = user.timezone;
       this.state.tier = user.tier;
+      if (user.streak !== undefined) this.userStreak = user.streak;
       if (this.state.activeScreen === 'me') {
         this.setScreen('me', { skipPersistence: true });
       }
