@@ -14,19 +14,29 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
   if (token) headers['Authorization'] = `Bearer ${token}`;
 
-  const res = await fetch(`${BASE}${path}`, {
-    method,
-    headers,
-    body: body !== undefined ? JSON.stringify(body) : undefined,
-  });
+  const url = `${BASE}${path}`;
+  console.log(`[API] ${method} ${url}`, { body, headers });
 
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({})) as { error?: string };
-    throw Object.assign(new Error(err.error ?? res.statusText), { status: res.status });
+  try {
+    const res = await fetch(url, {
+      method,
+      headers,
+      body: body !== undefined ? JSON.stringify(body) : undefined,
+    });
+
+    console.log(`[API] Response: ${res.status} ${res.statusText}`);
+
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({})) as { error?: string };
+      throw Object.assign(new Error(err.error ?? res.statusText), { status: res.status });
+    }
+
+    if (res.status === 204) return undefined as T;
+    return res.json() as Promise<T>;
+  } catch (error) {
+    console.error(`[API] Error: ${method} ${url}`, error);
+    throw error;
   }
-
-  if (res.status === 204) return undefined as T;
-  return res.json() as Promise<T>;
 }
 
 export const api = {

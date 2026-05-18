@@ -1,4 +1,5 @@
 import * as Sentry from '@sentry/browser';
+import { inject } from '@vercel/analytics';
 import '@fontsource/dm-serif-display/400.css';
 import '@fontsource/dm-serif-display/400-italic.css';
 import '@fontsource/dm-sans/300.css';
@@ -15,6 +16,8 @@ Sentry.init({
   enabled: import.meta.env.PROD,
   tracesSampleRate: 0.1,
 });
+
+inject();
 
 type ScreenId =
   | 'splash'
@@ -1063,13 +1066,15 @@ class NightCallApp {
       void this.requestPushPermission();
       this.setScreen(this.resolveHomeScreen());
     } catch (err: unknown) {
+      console.error('enterNightCall error:', err);
       const e = err as { status?: number; message?: string };
       if (e.status === 429) {
         this.showToast('Too many attempts — wait a moment');
       } else if (!navigator.onLine) {
         this.showToast('No internet — check your connection');
       } else {
-        this.showToast('Could not connect to server — try again');
+        const msg = e.message ?? 'Unknown error';
+        this.showToast(`Could not connect: ${msg}`);
       }
     }
   }
