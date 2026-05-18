@@ -2164,3 +2164,526 @@ body {
   color: #e0404a;
   animation: pulse-fast 1s infinite;
 }
+
+/* ══════════════════════════════════════════════════════════════════════
+   SPRINT 4.6 — Design System + New Screens
+   ══════════════════════════════════════════════════════════════════════ */
+
+/* ── CSS custom properties ────────────────────────────────────────────── */
+:root {
+  --shadow-sm: 0 2px 8px rgba(124, 108, 250, 0.12);
+  --shadow-md: 0 4px 16px rgba(124, 108, 250, 0.18);
+  --shadow-lg: 0 8px 32px rgba(124, 108, 250, 0.25);
+}
+
+/* ── Global scrollbar ─────────────────────────────────────────────────── */
+::-webkit-scrollbar { width: 2px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #2a2a3e; border-radius: 2px; }
+
+/* ── Screen fade-in animation ─────────────────────────────────────────── */
+.screen.active {
+  animation: screen-fade-in 280ms ease-out both;
+}
+
+.screen.tab-transition {
+  animation: screen-tab-fade 200ms linear both !important;
+}
+
+@keyframes screen-fade-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes screen-tab-fade {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+/* ── Splash stagger animation ─────────────────────────────────────────── */
+@keyframes fade-in-up {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: none; }
+}
+
+/* ── Button: active press + loading ──────────────────────────────────── */
+button:not(:disabled):active {
+  transform: scale(0.97);
+  filter: brightness(0.9);
+  transition: transform 80ms ease, filter 80ms ease;
+}
+
+button.loading {
+  pointer-events: none;
+}
+
+button.loading .btn-text { display: none; }
+
+button.loading::after {
+  content: '';
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border: 2px solid rgba(255,255,255,0.3);
+  border-top-color: #fff;
+  border-radius: 50%;
+  animation: btn-spin 800ms linear infinite;
+  vertical-align: middle;
+}
+
+@keyframes btn-spin { to { transform: rotate(360deg); } }
+
+button.error-shake { animation: btn-shake 300ms ease; }
+
+@keyframes btn-shake {
+  0%, 100% { transform: translateX(0); }
+  20%       { transform: translateX(-4px); }
+  60%       { transform: translateX(4px); }
+  80%       { transform: translateX(-2px); }
+}
+
+/* ── Icon button ──────────────────────────────────────────────────────── */
+.icon-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: 0;
+  cursor: pointer;
+  color: #8b8ba0;
+  border-radius: 50%;
+  padding: 10px;
+  min-height: 44px;
+  min-width: 44px;
+}
+
+.icon-btn:hover { color: #c4b8f0; }
+.icon-btn .icon { width: 20px; height: 20px; }
+
+/* ── Welcome screen: feature cards ───────────────────────────────────── */
+.ob-welcome-top {
+  text-align: center;
+  padding: 24px 24px 12px;
+}
+
+.moon-float {
+  font-size: 48px;
+  display: block;
+  animation: moon-float 6s ease-in-out infinite;
+  margin-bottom: 8px;
+}
+
+@keyframes moon-float {
+  0%, 100% { transform: translateY(0); }
+  50%       { transform: translateY(-8px); }
+}
+
+.feature-cards-wrap {
+  padding: 0 16px;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+.feature-cards {
+  display: flex;
+  transition: transform 300ms ease;
+  gap: 12px;
+}
+
+.feature-card {
+  background: #0f0f1a;
+  border: 1px solid #2a2a3e;
+  border-radius: 16px;
+  padding: 20px 16px;
+  min-width: 100%;
+  width: 100%;
+  flex-shrink: 0;
+  text-align: center;
+  box-shadow: var(--shadow-sm);
+}
+
+.fc-icon { font-size: 32px; margin-bottom: 10px; }
+
+.fc-title {
+  font-family: 'DM Serif Display', Georgia, serif;
+  font-size: 1.125rem;
+  color: #fff;
+  margin-bottom: 6px;
+}
+
+.fc-body { font-size: 0.8125rem; color: #8b8ba0; line-height: 1.6; }
+
+.card-dots { display: flex; justify-content: center; gap: 6px; margin-top: 12px; }
+
+.cdot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #2a2a3e;
+  transition: all 200ms;
+}
+
+.cdot.active { width: 8px; height: 8px; background: #7c6cfa; }
+
+/* ── Notification permission screen ──────────────────────────────────── */
+.notif-screen {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  gap: 14px;
+  padding: 24px;
+}
+
+.ob-btn-outline {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 13px;
+  color: #a89de0;
+  background: transparent;
+  border: 1px solid #3d2f6a;
+  border-radius: 12px;
+  cursor: pointer;
+  font-family: 'DM Sans', sans-serif;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  min-height: 44px;
+}
+
+.ob-btn-outline:hover { background: #1a1025; }
+
+/* ── Waiting room ─────────────────────────────────────────────────────── */
+.waiting-room {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 20px;
+  padding: 0 24px;
+  position: relative;
+}
+
+.wait-message {
+  font-family: 'DM Serif Display', Georgia, serif;
+  font-size: 1.375rem;
+  color: #fff;
+  font-style: italic;
+  text-align: center;
+  margin-bottom: 4px;
+}
+
+.wait-sub { font-size: 0.8125rem; color: #8b8ba0; font-style: italic; text-align: center; }
+
+.wait-progress-wrap {
+  width: 60%;
+  height: 2px;
+  background: #2a2a3e;
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.wait-progress-bar {
+  height: 100%;
+  width: 0%;
+  background: linear-gradient(90deg, #7c6cfa, #c4b8f0);
+  border-radius: 2px;
+  transition: width 1s linear;
+}
+
+.wait-quote {
+  padding: 0 24px 20px;
+  font-family: 'DM Serif Display', Georgia, serif;
+  font-style: italic;
+  font-size: 0.875rem;
+  color: #c4b8f0;
+  text-align: center;
+  line-height: 1.6;
+  opacity: 0;
+  transition: opacity 600ms;
+  flex-shrink: 0;
+}
+
+.queue-count { font-size: 0.75rem; color: #a89de0; }
+
+/* ── Candle animation ─────────────────────────────────────────────────── */
+@keyframes candle-flicker {
+  0%, 100% { transform: scale(1, 1) rotate(-0.5deg); opacity: 1; }
+  25%       { transform: scale(0.97, 1.03) rotate(0.5deg); opacity: 0.96; }
+  50%       { transform: scale(1.02, 0.98) rotate(-0.3deg); opacity: 1; }
+  75%       { transform: scale(0.98, 1.02) rotate(0.3deg); opacity: 0.97; }
+}
+
+.candle-flame { animation: candle-flicker 0.2s ease-in-out infinite; transform-origin: 30px 38px; }
+.candle-glow  { animation: candle-flicker 0.4s ease-in-out infinite; }
+
+@keyframes candle-out {
+  0%   { opacity: 1; transform: scale(1); }
+  50%  { opacity: 0.5; transform: scale(1.2) translateY(-4px); }
+  100% { opacity: 0; transform: scale(0.8); }
+}
+
+/* ── Mute banner ──────────────────────────────────────────────────────── */
+.mute-banner {
+  display: none;
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 20;
+  background: #2a1a06;
+  border-bottom: 1px solid #f5a623;
+  padding: 10px 16px;
+  font-size: 0.75rem;
+  color: #f5a623;
+  text-align: center;
+}
+
+.mute-banner.visible { display: block; }
+
+/* ── Hard cut to black (post-call) ───────────────────────────────────── */
+.phone.hard-cut {
+  background: #000 !important;
+}
+
+.phone.hard-cut * {
+  opacity: 0 !important;
+  transition: none !important;
+}
+
+/* ── Post-call: "You will never speak to them again" fade ────────────── */
+.postcall-never {
+  opacity: 0;
+  transition: opacity 800ms ease 1000ms;
+  color: #4a4a60;
+}
+
+.postcall-never.visible { opacity: 1; }
+
+/* ── Post-call options screen ─────────────────────────────────────────── */
+.option-card {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  background: #0f0f1a;
+  border: 1px solid #2a2a3e;
+  border-radius: 16px;
+  padding: 16px;
+  cursor: pointer;
+  text-align: left;
+  width: 100%;
+  transition: border-color 150ms;
+  min-height: 44px;
+}
+
+.option-card:hover { border-color: #3d2f6a; }
+
+.oc-icon { font-size: 28px; flex-shrink: 0; }
+
+.oc-title { font-size: 0.875rem; color: #fff; font-weight: 500; margin-bottom: 2px; }
+.oc-sub   { font-size: 0.75rem; color: #6b6b80; }
+.oc-chev  { color: #4a4a60; margin-left: auto; flex-shrink: 0; }
+
+/* ── Wall: filter tabs ────────────────────────────────────────────────── */
+.wall-filters {
+  display: flex;
+  gap: 0;
+  padding: 0 16px 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+  flex-shrink: 0;
+  border-bottom: 1px solid #1e1e2e;
+  margin-bottom: 0;
+}
+
+.wall-filters::-webkit-scrollbar { display: none; }
+
+.wf-tab {
+  background: none;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  padding: 8px 14px;
+  font-size: 0.75rem;
+  color: #4a4a60;
+  cursor: pointer;
+  white-space: nowrap;
+  font-family: 'DM Sans', sans-serif;
+  transition: all 150ms;
+  min-height: 40px;
+}
+
+.wf-tab.active { color: #7c6cfa; border-bottom-color: #7c6cfa; }
+
+/* ── Wall post: type label + heart ───────────────────────────────────── */
+.wi-type {
+  font-size: 0.5625rem;
+  color: #7c6cfa;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  margin-bottom: 6px;
+}
+
+.wi-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 8px;
+}
+
+.heart-btn {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  background: none;
+  border: 0;
+  color: #6b6b80;
+  font-size: 0.875rem;
+  cursor: pointer;
+  padding: 4px 8px;
+  min-height: unset;
+  min-width: unset;
+  border-radius: 8px;
+  transition: color 150ms;
+}
+
+.heart-btn:hover { color: #a89de0; }
+.heart-btn.liked { color: #7c6cfa; animation: heart-pop 200ms ease; }
+
+@keyframes heart-pop {
+  0%, 100% { transform: scale(1); }
+  50%       { transform: scale(1.3); }
+}
+
+/* ── No-match screen ──────────────────────────────────────────────────── */
+.no-match-screen {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  padding: 24px;
+  text-align: center;
+}
+
+/* ── No-internet screen ───────────────────────────────────────────────── */
+/* reuses .empty-state from Sprint 4.5 */
+
+/* ── Night report banner ──────────────────────────────────────────────── */
+.night-report {
+  background: #0f0f1a;
+  border-left: 3px solid #7c6cfa;
+  border-radius: 0 14px 14px 0;
+  padding: 14px 16px 14px 14px;
+  margin-bottom: 8px;
+  position: relative;
+  display: none;
+}
+
+.night-report.visible { display: block; }
+
+.night-report-dismiss {
+  position: absolute;
+  top: 8px;
+  right: 10px;
+  background: none;
+  border: 0;
+  color: #6b6b80;
+  font-size: 1.125rem;
+  cursor: pointer;
+  min-height: unset;
+  min-width: unset;
+  padding: 4px;
+  line-height: 1;
+}
+
+.report-label {
+  font-size: 0.625rem;
+  color: #7c6cfa;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  margin-bottom: 8px;
+}
+
+.report-line { font-size: 0.8125rem; color: #c4b8f0; line-height: 1.6; }
+.report-line:not(:last-child) { margin-bottom: 2px; }
+
+/* ── Streak pulse on load ─────────────────────────────────────────────── */
+@keyframes streak-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(124,108,250,0); }
+  50%       { box-shadow: 0 0 0 8px rgba(124,108,250,0.4); }
+}
+
+.streak-card.has-streak { animation: streak-pulse 1.2s ease-out; }
+
+/* ── Badge confetti particles ─────────────────────────────────────────── */
+@keyframes confetti-fall {
+  from { opacity: 1; transform: translateY(-20px) rotate(0deg); }
+  to   { opacity: 0; transform: translateY(60px) rotate(180deg); }
+}
+
+/* ── Candle wrapper + SVG ─────────────────────────────────────────────── */
+.candle-wrap {
+  position: relative;
+  width: 60px;
+  height: 100px;
+  flex-shrink: 0;
+}
+
+.candle-svg {
+  width: 60px;
+  height: 100px;
+  overflow: visible;
+  transition: opacity 0.4s ease, transform 0.4s ease;
+}
+
+.candle-svg.candle-out {
+  animation: candle-out 0.4s ease forwards;
+}
+
+/* ── Waiting room actions row ─────────────────────────────────────────── */
+.wait-actions {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  margin-top: 8px;
+}
+
+/* ── Wait quote fade-in ───────────────────────────────────────────────── */
+.wait-quote:not(:empty) { opacity: 1; }
+
+/* ── Post-call options: postcall-never button ─────────────────────────── */
+.postcall-never {
+  display: block;
+  width: 100%;
+  padding: 14px;
+  margin-top: 12px;
+  background: none;
+  border: none;
+  color: var(--text-muted, #8b8ba0);
+  font-family: 'DM Sans', sans-serif;
+  font-size: 0.875rem;
+  cursor: pointer;
+  text-align: center;
+  letter-spacing: 0.02em;
+}
+
+.postcall-never:hover { color: #c4b8f0; }
+
+/* ── Notification permission icon ─────────────────────────────────────── */
+.notif-icon {
+  margin: 2rem auto 1.5rem;
+  width: 56px;
+  height: 56px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #1e1635;
+  border-radius: 50%;
+}
+
+.notif-icon .icon { width: 28px; height: 28px; color: #7c6cfa; }

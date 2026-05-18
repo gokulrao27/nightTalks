@@ -108,6 +108,19 @@ export const api = {
       return request('DELETE', '/push/subscribe');
     },
   },
+
+  confessions: {
+    async list(cursor?: string): Promise<{ confessions: Confession[]; nextCursor: string | null }> {
+      const qs = cursor ? `?cursor=${encodeURIComponent(cursor)}` : '';
+      return request('GET', `/confession${qs}`);
+    },
+  },
+
+  stats: {
+    async lastNight(): Promise<LastNightStats> {
+      return request('GET', '/stats/last-night');
+    },
+  },
 };
 
 export interface User {
@@ -131,4 +144,17 @@ export interface CallRecord {
   started_at: string;
   duration_secs: number;
   word: string | null;
+}
+
+export interface Confession {
+  id: string;
+  body: string;
+  country_vague: string | null;
+  created_at: string;
+}
+
+export interface LastNightStats {
+  calls: number;
+  unique_countries: number;
+  top_word: string | null;
 }

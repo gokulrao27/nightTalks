@@ -24,6 +24,7 @@ type ScreenId =
   | 'onboarding-welcome'
   | 'onboarding-setup'
   | 'onboarding-confirm'
+  | 'onboard-notif'
   | 'home-closed'
   | 'home-open'
   | 'confess-before-call'
@@ -31,7 +32,10 @@ type ScreenId =
   | 'connecting'
   | 'incall'
   | 'postcall'
+  | 'postcall-options'
   | 'confession-reveal'
+  | 'no-match'
+  | 'no-internet'
   | 'wall'
   | 'history'
   | 'me'
@@ -175,6 +179,31 @@ const CONFESSION_QUESTIONS = [
   "What's the one thing keeping you awake tonight?",
 ];
 
+const WAIT_QUOTES = [
+  '"Loneliness is not about being alone — it\'s about not being understood."',
+  '"Some conversations only happen at 2am, and that\'s why they matter."',
+  '"The best thing about a stranger is they don\'t know your story yet."',
+  '"There is courage in calling at 2am. You recognized it."',
+  '"Silence between two strangers is never empty."',
+];
+
+const WAIT_MESSAGES: Array<{ secs: number; msg: string; sub: string }> = [
+  { secs: 0,   msg: 'Finding your stranger…',     sub: 'Somewhere in the world, someone is waiting too.' },
+  { secs: 30,  msg: 'Still looking…',              sub: 'Good conversations are worth the wait.' },
+  { secs: 60,  msg: 'Searching a little longer…', sub: 'The night is full of people who can\'t sleep.' },
+  { secs: 90,  msg: 'Almost there…',               sub: 'They could be anywhere on Earth.' },
+  { secs: 120, msg: 'Still here…',                 sub: 'Sometimes the right stranger takes time to find.' },
+  { secs: 150, msg: 'Waiting with you…',           sub: 'You\'re not alone in this moment.' },
+];
+
+const CALL_HINTS = [
+  '"The best NightCalls happen when you say the thing you\'ve never said out loud."',
+  '"Your stranger won\'t remember your name. That\'s the point."',
+  '"You have 10 minutes. Use them for something true."',
+  '"Ask them what they\'d do if they weren\'t afraid."',
+  '"Silence is okay. It means something too."',
+];
+
 function getStreakTier(streak: number): typeof STREAK_TIERS[number] {
   return [...STREAK_TIERS].reverse().find((t) => streak >= t.min) ?? STREAK_TIERS[0];
 }
@@ -269,6 +298,18 @@ class NightCallApp {
   private userStreak = 0;
   private reportedUserId: string | undefined;
 
+  // Sprint 4.6 state
+  private waitTimerId: number | undefined;
+  private waitElapsedSeconds = 0;
+  private waitQuoteTimerId: number | undefined;
+  private ambientCtx: AudioContext | undefined;
+  private ambientGain: GainNode | undefined;
+  private ambientOn = false;
+  private hintTimerId: number | undefined;
+  private wallFilter: 'all' | 'confessions' | 'words' = 'all';
+  private likedPosts = new Set<string>();
+  private stopParticlesFn: (() => void) | undefined;
+
   constructor(root: HTMLElement) {
     if ('serviceWorker' in navigator) {
       navigator.serviceWorker.register('/sw.js').catch(console.error);
@@ -281,6 +322,10 @@ class NightCallApp {
     this.updateTimerDisplay();
     this.clockTimerId = window.setInterval(() => this.updateClockAndWindow(), 1_000);
     document.addEventListener('visibilitychange', () => this.handleVisibilityChange());
+    window.addEventListener('offline', () => this.setScreen('no-internet'));
+    window.addEventListener('online', () => {
+      if (this.state.activeScreen === 'no-internet') this.setScreen(this.resolveHomeScreen());
+    });
     void this.scheduleSplashTransition();
   }
 
@@ -357,6 +402,10 @@ class NightCallApp {
           ${this.inCallTemplate()}
           ${this.postCallTemplate()}
           ${this.confessionRevealTemplate()}
+          ${this.postCallOptionsTemplate()}
+          ${this.noMatchTemplate()}
+          ${this.noInternetTemplate()}
+          ${this.onboardNotifTemplate()}
           ${this.wallTemplate()}
           ${this.historyTemplate()}
           ${this.meTemplate()}
@@ -403,10 +452,10 @@ class NightCallApp {
     return `
       <section class="screen active" data-screen="splash" aria-labelledby="splash-title">
         <div class="splash-bg">
-          <div class="splash-ring">${icon('moon', 'splash-icon')}</div>
-          <h1 class="splash-logo" id="splash-title" data-autofocus tabindex="-1">Night<em>Call</em></h1>
-          <p class="tagline">10 minutes. One stranger. Then it's over.</p>
-          <p class="splash-loading">Loading…</p>
+          <div class="splash-ring" style="animation:fade-in-up 0.6s ease 0s both">${icon('moon', 'splash-icon')}</div>
+          <h1 class="splash-logo" id="splash-title" data-autofocus tabindex="-1" style="animation:fade-in-up 0.6s ease 0.15s both">Night<em>Call</em></h1>
+          <p class="tagline" style="animation:fade-in-up 0.6s ease 0.3s both">10 minutes. One stranger. Then it's over.</p>
+          <p class="splash-loading" style="animation:fade-in-up 0.6s ease 0.45s both">Loading…</p>
         </div>
       </section>
     `;
@@ -418,17 +467,41 @@ class NightCallApp {
         ${this.statusBarTemplate()}
         ${this.stepsTemplate(1)}
         <div class="ob-scroll">
-          <h2 class="ob-title ob-title--large" id="welcome-title" data-autofocus tabindex="-1">The line opens<br />at midnight.</h2>
-          <p class="ob-sub">Every night, for exactly 50 minutes — 2:00 to 2:50 AM — a line opens. You get 10 minutes with a stranger. Then it's gone. So are they.</p>
-          <article class="quote-card">
-            <div class="quote-label">From The Wall, last night</div>
-            <p class="quote-copy">"She laughed when I said I was scared of being forgotten. Then said she was too."</p>
-            <div class="quote-meta">— From somewhere in Brazil</div>
-          </article>
-          <article class="quote-card">
-            <p class="quote-copy">"I told a stranger the thing I've been holding for three years. It took 4 minutes. I feel lighter."</p>
-            <div class="quote-meta">— From somewhere in India</div>
-          </article>
+          <div class="ob-welcome-top" aria-hidden="true">
+            <div class="moon-float">${icon('moon')}</div>
+          </div>
+          <h2 class="ob-title ob-title--large" id="welcome-title" data-autofocus tabindex="-1">The line opens<br />at 2 AM.</h2>
+          <p class="ob-sub">Every night, for exactly 50 minutes. You get 10 minutes with a stranger. Then it's gone. So are they.</p>
+          <div class="feature-cards-wrap">
+            <div class="feature-cards" role="list">
+              <div class="feature-card" role="listitem">
+                <div class="fc-icon" aria-hidden="true">📞</div>
+                <div class="fc-title">10 minutes</div>
+                <div class="fc-body">One call. One stranger. No usernames to remember, no profiles to build.</div>
+              </div>
+              <div class="feature-card" role="listitem">
+                <div class="fc-icon" aria-hidden="true">🎭</div>
+                <div class="fc-title">Anonymous</div>
+                <div class="fc-body">No real name. No photo. Just a voice in the dark. Be whoever you are tonight.</div>
+              </div>
+              <div class="feature-card" role="listitem">
+                <div class="fc-icon" aria-hidden="true">🌙</div>
+                <div class="fc-title">2 AM only</div>
+                <div class="fc-body">The line opens for 50 minutes every night. When it closes, it's gone.</div>
+              </div>
+              <div class="feature-card" role="listitem">
+                <div class="fc-icon" aria-hidden="true">🔒</div>
+                <div class="fc-title">No recordings</div>
+                <div class="fc-body">Your call is never recorded. We don't know who you are. That's intentional.</div>
+              </div>
+            </div>
+            <div class="card-dots" aria-hidden="true">
+              <div class="cdot active"></div>
+              <div class="cdot"></div>
+              <div class="cdot"></div>
+              <div class="cdot"></div>
+            </div>
+          </div>
           <button class="ob-btn" data-action="welcome-next" type="button">Get started ${icon('arrowRight')}</button>
           <p class="fineprint">Free · Anonymous · No account required</p>
         </div>
@@ -599,31 +672,46 @@ class NightCallApp {
   }
 
   private callingTemplate(): string {
-    const hasPass = this.state.passesLeft > 0;
     return `
       <section class="screen" data-screen="calling" aria-labelledby="calling-title">
         ${this.statusBarTemplate()}
-        <div class="calling-bg">
-          <div class="calling-ring" aria-hidden="true"><div class="calling-emoji">🌙</div></div>
-          <div class="calling-label">Connecting</div>
-          <h2 class="calling-title" id="calling-title" data-autofocus tabindex="-1">Finding your stranger...</h2>
-          <p class="calling-sub">Somewhere in the world,<br />someone is waiting too.</p>
-          <div class="call-actions">
-            <div class="call-action">
-              <button class="call-action-btn call-end" data-action="cancel-call" type="button" aria-label="Cancel call">${icon('phoneOff')}</button>
-              <div class="call-action-label">Cancel</div>
-            </div>
+        <div class="waiting-room">
+          <canvas data-particles style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none;opacity:0.4" aria-hidden="true"></canvas>
+          <div class="candle-wrap" aria-hidden="true">
+            <svg class="candle-svg" viewBox="0 0 40 80">
+              <line x1="20" y1="38" x2="20" y2="30" stroke="#888" stroke-width="1.5"/>
+              <ellipse class="candle-glow" cx="20" cy="26" rx="14" ry="14"/>
+              <path class="candle-flame" d="M20 14 C17 20 15 25 20 29 C25 25 23 20 20 14Z"/>
+              <rect x="15" y="38" width="10" height="34" rx="2" fill="#c8a06e"/>
+              <rect x="16" y="37" width="8" height="5" rx="1" fill="#b8905e"/>
+            </svg>
           </div>
-          ${hasPass ? `<button class="pass-link" data-action="use-pass" type="button">Use a pass to skip this match — ${this.state.passesLeft} ${this.state.passesLeft === 1 ? 'pass' : 'passes'} left</button>` : ''}
+          <h2 class="wait-message" id="calling-title" data-wait-message data-autofocus tabindex="-1">Finding your stranger…</h2>
+          <p class="wait-sub" data-wait-sub>Somewhere in the world, someone is waiting too.</p>
+          <div class="wait-progress-wrap" aria-label="Search progress" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+            <div class="wait-progress-bar" data-wait-progress style="width:0%"></div>
+          </div>
+          <p class="wait-quote" data-wait-quote aria-live="polite"></p>
+          <div class="wait-actions">
+            <button class="icon-btn" data-action="toggle-ambient" type="button" aria-label="Toggle ambient sound" title="Ambient sound">
+              <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
+            </button>
+            <button class="call-action-btn call-end" data-action="cancel-call" type="button" aria-label="Cancel call">${icon('phoneOff')}</button>
+          </div>
+          ${this.state.passesLeft > 0 ? `<button class="pass-link" data-action="use-pass" type="button">Skip this match — ${this.state.passesLeft} ${this.state.passesLeft === 1 ? 'pass' : 'passes'} left</button>` : ''}
         </div>
       </section>
     `;
   }
 
   private inCallTemplate(): string {
+    const firstHint = CALL_HINTS[Math.floor(Math.random() * CALL_HINTS.length)];
     return `
       <section class="screen" data-screen="incall" aria-labelledby="incall-question">
         ${this.statusBarTemplate()}
+        <div class="mute-banner ${this.isMuted ? 'visible' : ''}" data-mute-banner aria-live="assertive" aria-atomic="true">
+          ${icon('phoneOff')} Microphone muted
+        </div>
         <div class="incall-top">
           <h2 class="incall-qs" id="incall-question" data-autofocus tabindex="-1">"${this.escapeHtml(this.currentPrompt)}"</h2>
           <div class="timer-bar" aria-hidden="true"><div class="timer-fill" data-timer-fill></div></div>
@@ -636,7 +724,7 @@ class NightCallApp {
             </div>
             <div class="wave-label">Your stranger is speaking...</div>
           </div>
-          <aside class="incall-hint">"The best NightCalls happen when you say the thing you've never said out loud. This stranger won't remember your name. That's the point."</aside>
+          <aside class="incall-hint" data-call-hint>${firstHint}</aside>
         </div>
         <button class="wall-btn wall-btn--muted" data-action="toggle-mute" type="button" aria-pressed="${this.isMuted}">${this.isMuted ? 'Unmute' : 'Mute'}</button>
         <button class="wall-btn wall-btn--muted" data-action="report-call" type="button">Report caller</button>
@@ -672,21 +760,38 @@ class NightCallApp {
   }
 
   private wallTemplate(): string {
-    const posts = this.apiWallPosts.length > 0
-      ? this.apiWallPosts.map(({ body, country_vague, created_at }) => `
-          <article class="wall-item">
-            <p class="wall-quote">"${this.escapeHtml(body)}"</p>
-            <div class="wall-meta"><span class="wall-dot" aria-hidden="true"></span>From ${this.escapeHtml(country_vague ?? 'somewhere in the world')} <span class="wall-dot" aria-hidden="true"></span> ${this.relativeTime(created_at)}</div>
-          </article>
-        `).join('')
-      : WALL_POSTS.map(({ quote, region, age }) => `
+    const filter = this.wallFilter;
+
+    const apiPosts = this.apiWallPosts.filter((p) => {
+      if (filter === 'words') return p.body.length <= 25;
+      if (filter === 'confessions') return p.body.length > 25;
+      return true;
+    });
+
+    const posts = apiPosts.length > 0
+      ? apiPosts.map(({ id, body, country_vague, created_at }) => {
+          const isWord = body.length <= 25;
+          const typeLabel = isWord ? 'one word' : 'confession';
+          const liked = this.likedPosts.has(id);
+          return `
+            <article class="wall-item">
+              <p class="wall-quote">"${this.escapeHtml(body)}"</p>
+              <div class="wall-meta"><span class="wall-dot" aria-hidden="true"></span>From ${this.escapeHtml(country_vague ?? 'somewhere in the world')} <span class="wall-dot" aria-hidden="true"></span> ${this.relativeTime(created_at)}</div>
+              <div class="wi-footer">
+                <span class="wi-type">${typeLabel}</span>
+                <button class="heart-btn ${liked ? 'liked' : ''}" data-action="like-post" data-post-id="${id}" type="button" aria-label="${liked ? 'Unlike' : 'Like'} this post" aria-pressed="${liked}">${liked ? '♥' : '♡'}</button>
+              </div>
+            </article>
+          `;
+        }).join('')
+      : (this.apiWallPosts.length === 0 ? WALL_POSTS.map(({ quote, region, age }) => `
           <article class="wall-item">
             <p class="wall-quote">"${quote}"</p>
             <div class="wall-meta"><span class="wall-dot" aria-hidden="true"></span>From somewhere in ${region} <span class="wall-dot" aria-hidden="true"></span> ${age}</div>
           </article>
-        `).join('');
+        `).join('') : this.emptyState('🌙', 'Nothing here yet', 'No posts match this filter.'));
 
-    const loadMore = this.wallNextCursor
+    const loadMore = this.wallNextCursor && filter === 'all'
       ? `<button class="wall-btn" data-action="load-more-wall" type="button">Load more</button>`
       : '';
 
@@ -700,6 +805,14 @@ class NightCallApp {
            + Add your confession
          </button>`;
 
+    const filterTabs = `
+      <div class="wall-filters" role="tablist" aria-label="Filter posts">
+        <button class="wf-tab ${filter === 'all' ? 'active' : ''}" data-filter="all" role="tab" aria-selected="${filter === 'all'}" type="button">All</button>
+        <button class="wf-tab ${filter === 'confessions' ? 'active' : ''}" data-filter="confessions" role="tab" aria-selected="${filter === 'confessions'}" type="button">Confessions</button>
+        <button class="wf-tab ${filter === 'words' ? 'active' : ''}" data-filter="words" role="tab" aria-selected="${filter === 'words'}" type="button">One Words</button>
+      </div>
+    `;
+
     return `
       <section class="screen" data-screen="wall" aria-labelledby="wall-title">
         ${this.statusBarTemplate()}
@@ -707,6 +820,7 @@ class NightCallApp {
           <h2 class="wall-title" id="wall-title" data-autofocus tabindex="-1">The Wall</h2>
           <p class="wall-subtitle">Things people wish they'd said. Anonymous. Forever.</p>
           ${confessionBtn}
+          ${filterTabs}
         </div>
         <div class="scroll">${posts}${loadMore}</div>
         ${this.bottomNavTemplate('wall')}
@@ -981,6 +1095,88 @@ class NightCallApp {
     `;
   }
 
+  private postCallOptionsTemplate(): string {
+    return `
+      <section class="screen" data-screen="postcall-options" aria-labelledby="pco-title">
+        ${this.statusBarTemplate()}
+        <div class="post-scroll">
+          <div class="post-emoji" aria-hidden="true">🌌</div>
+          <h2 class="post-title" id="pco-title" data-autofocus tabindex="-1">It's over.</h2>
+          <p class="post-sub">That conversation existed for exactly 10 minutes. You'll never speak to them again. That made it real.</p>
+          <button class="option-card" data-action="go-to-postcall" type="button">
+            <div class="oc-icon" aria-hidden="true">✨</div>
+            <div>
+              <div class="oc-title">Save your word</div>
+              <div class="oc-sub">One word to remember this call by.</div>
+            </div>
+            <div class="oc-chev" aria-hidden="true">›</div>
+          </button>
+          <button class="option-card" data-action="add-confession" type="button">
+            <div class="oc-icon" aria-hidden="true">📝</div>
+            <div>
+              <div class="oc-title">Write to The Wall</div>
+              <div class="oc-sub">Share something. Anonymous. Forever.</div>
+            </div>
+            <div class="oc-chev" aria-hidden="true">›</div>
+          </button>
+          <button class="option-card" data-action="retry-call" type="button">
+            <div class="oc-icon" aria-hidden="true">📞</div>
+            <div>
+              <div class="oc-title">Call again tonight</div>
+              <div class="oc-sub">If you still have calls left.</div>
+            </div>
+            <div class="oc-chev" aria-hidden="true">›</div>
+          </button>
+          <button class="postcall-never" data-action="go-home" type="button">I'm done for tonight →</button>
+        </div>
+      </section>
+    `;
+  }
+
+  private noMatchTemplate(): string {
+    return `
+      <section class="screen" data-screen="no-match" aria-labelledby="no-match-title">
+        ${this.statusBarTemplate()}
+        <div class="no-match-screen">
+          <div aria-hidden="true" style="font-size:3rem;margin-bottom:1rem">🌑</div>
+          <h2 id="no-match-title" data-autofocus tabindex="-1" style="font-size:1.4rem;margin-bottom:0.5rem">No match tonight.</h2>
+          <p style="color:var(--text-muted);margin-bottom:2rem;text-align:center">The line was quiet. Sometimes the universe has other plans.</p>
+          <button class="ob-btn" data-action="retry-call" type="button">Try again ${icon('phone')}</button>
+          <button class="wall-btn wall-btn--muted" data-action="go-home" type="button" style="margin-top:0.75rem">Go home</button>
+        </div>
+      </section>
+    `;
+  }
+
+  private noInternetTemplate(): string {
+    return `
+      <section class="screen" data-screen="no-internet" aria-labelledby="no-internet-title">
+        ${this.statusBarTemplate()}
+        <div class="no-match-screen">
+          <div aria-hidden="true" style="font-size:3rem;margin-bottom:1rem">📡</div>
+          <h2 id="no-internet-title" data-autofocus tabindex="-1" style="font-size:1.4rem;margin-bottom:0.5rem">No connection.</h2>
+          <p style="color:var(--text-muted);margin-bottom:2rem;text-align:center">Check your internet and try again. NightCall needs a connection to work.</p>
+          <button class="ob-btn" data-action="go-home" type="button">Try again</button>
+        </div>
+      </section>
+    `;
+  }
+
+  private onboardNotifTemplate(): string {
+    return `
+      <section class="screen" data-screen="onboard-notif" aria-labelledby="notif-title">
+        ${this.statusBarTemplate()}
+        <div class="notif-screen ob-scroll">
+          <div class="notif-icon" aria-hidden="true">${icon('bell')}</div>
+          <h2 class="ob-title" id="notif-title" data-autofocus tabindex="-1">Don't miss the 2 AM window</h2>
+          <p class="ob-sub">We'll send you a nudge at 1:55 AM each night — just before the line opens. Nothing else. Ever.</p>
+          <button class="ob-btn" data-action="enable-notif" type="button">${icon('bell')} Allow notifications</button>
+          <button class="ob-btn-outline" data-action="skip-notif" type="button">Not now</button>
+        </div>
+      </section>
+    `;
+  }
+
   private showReportSheet(): void {
     const sheet = this.root.querySelector<HTMLElement>('[data-report-sheet]');
     if (sheet) sheet.classList.add('open');
@@ -1010,6 +1206,175 @@ class NightCallApp {
       void api.calls.end(this.currentRoomId);
     }
     this.endCall();
+  }
+
+  private startWaitingRoom(): void {
+    this.waitElapsedSeconds = 0;
+    this.stopWaitingRoom();
+
+    // Progress bar + message rotation (1s tick)
+    this.waitTimerId = window.setInterval(() => {
+      this.waitElapsedSeconds += 1;
+      const pct = Math.min(100, Math.round((this.waitElapsedSeconds / 180) * 100));
+
+      const bar = this.root.querySelector<HTMLElement>('[data-wait-progress]');
+      if (bar) {
+        bar.style.width = `${pct}%`;
+        bar.closest('[role="progressbar"]')?.setAttribute('aria-valuenow', String(pct));
+      }
+
+      const msgs = WAIT_MESSAGES.filter((m) => m.secs <= this.waitElapsedSeconds);
+      const current = msgs[msgs.length - 1];
+      if (current) {
+        const msgEl = this.root.querySelector<HTMLElement>('[data-wait-message]');
+        const subEl = this.root.querySelector<HTMLElement>('[data-wait-sub]');
+        if (msgEl && msgEl.textContent !== current.msg) msgEl.textContent = current.msg;
+        if (subEl && subEl.textContent !== current.sub) subEl.textContent = current.sub;
+      }
+
+      if (this.waitElapsedSeconds >= 180) {
+        this.stopWaitingRoom();
+        send('queue:leave');
+        this.setScreen('no-match');
+      }
+    }, 1_000);
+
+    // Rotate quotes every 8s
+    let quoteIdx = 0;
+    const rotateQuote = () => {
+      const quoteEl = this.root.querySelector<HTMLElement>('[data-wait-quote]');
+      if (quoteEl) {
+        quoteEl.style.opacity = '0';
+        window.setTimeout(() => {
+          quoteEl.textContent = WAIT_QUOTES[quoteIdx % WAIT_QUOTES.length];
+          quoteEl.style.opacity = '1';
+        }, 300);
+      }
+      quoteIdx++;
+    };
+    window.setTimeout(rotateQuote, 1_000); // show first quote after 1s delay
+    this.waitQuoteTimerId = window.setInterval(rotateQuote, 8_000);
+
+    this.startParticles();
+  }
+
+  private stopWaitingRoom(): void {
+    if (this.waitTimerId !== undefined) { window.clearInterval(this.waitTimerId); this.waitTimerId = undefined; }
+    if (this.waitQuoteTimerId !== undefined) { window.clearInterval(this.waitQuoteTimerId); this.waitQuoteTimerId = undefined; }
+    this.stopAmbientAudio();
+    if (this.stopParticlesFn) { this.stopParticlesFn(); this.stopParticlesFn = undefined; }
+  }
+
+  private startParticles(): void {
+    const canvas = this.root.querySelector<HTMLCanvasElement>('[data-particles]');
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    const resize = () => {
+      canvas.width = canvas.offsetWidth || canvas.parentElement?.offsetWidth || 300;
+      canvas.height = canvas.offsetHeight || canvas.parentElement?.offsetHeight || 500;
+    };
+    resize();
+
+    type Particle = { x: number; y: number; r: number; speed: number; opacity: number };
+    const particles: Particle[] = Array.from({ length: 25 }, () => ({
+      x: Math.random() * canvas.width,
+      y: Math.random() * canvas.height,
+      r: Math.random() * 1.5 + 0.5,
+      speed: Math.random() * 0.25 + 0.1,
+      opacity: Math.random() * 0.5 + 0.2,
+    }));
+
+    let running = true;
+    const draw = () => {
+      if (!running) return;
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      for (const p of particles) {
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
+        ctx.fillStyle = `rgba(200,180,255,${p.opacity})`;
+        ctx.fill();
+        p.y -= p.speed;
+        if (p.y < -5) { p.y = canvas.height + 5; p.x = Math.random() * canvas.width; }
+      }
+      requestAnimationFrame(draw);
+    };
+    draw();
+
+    this.stopParticlesFn = () => { running = false; };
+  }
+
+  private startAmbientAudio(): void {
+    try {
+      if (this.ambientCtx) return;
+      this.ambientCtx = new AudioContext();
+      this.ambientGain = this.ambientCtx.createGain();
+      this.ambientGain.gain.value = 0;
+      this.ambientGain.connect(this.ambientCtx.destination);
+
+      const rate = this.ambientCtx.sampleRate;
+      const buffer = this.ambientCtx.createBuffer(1, rate * 2, rate);
+      const data = buffer.getChannelData(0);
+      for (let i = 0; i < data.length; i++) data[i] = (Math.random() * 2 - 1) * 0.04;
+
+      const source = this.ambientCtx.createBufferSource();
+      source.buffer = buffer;
+      source.loop = true;
+
+      const filter = this.ambientCtx.createBiquadFilter();
+      filter.type = 'lowpass';
+      filter.frequency.value = 400;
+
+      source.connect(filter);
+      filter.connect(this.ambientGain);
+      source.start();
+
+      this.ambientGain.gain.setTargetAtTime(0.25, this.ambientCtx.currentTime, 0.8);
+      this.ambientOn = true;
+    } catch { /* AudioContext not supported */ }
+  }
+
+  private stopAmbientAudio(): void {
+    if (this.ambientCtx) {
+      this.ambientCtx.close().catch(() => {});
+      this.ambientCtx = undefined;
+      this.ambientGain = undefined;
+      this.ambientOn = false;
+    }
+  }
+
+  private toggleAmbient(): void {
+    if (this.ambientOn) {
+      this.stopAmbientAudio();
+      this.showToast('Ambient sound off');
+    } else {
+      this.startAmbientAudio();
+      this.showToast('Ambient sound on');
+    }
+  }
+
+  private filterWall(filter: 'all' | 'confessions' | 'words'): void {
+    this.wallFilter = filter;
+    if (this.state.activeScreen === 'wall') this.setScreen('wall', { skipPersistence: true });
+  }
+
+  private likePost(postId: string): void {
+    const wasLiked = this.likedPosts.has(postId);
+    if (wasLiked) {
+      this.likedPosts.delete(postId);
+    } else {
+      this.likedPosts.add(postId);
+      haptic(20);
+    }
+    const btn = this.root.querySelector<HTMLButtonElement>(`[data-post-id="${postId}"]`);
+    if (btn) {
+      const liked = this.likedPosts.has(postId);
+      btn.classList.toggle('liked', liked);
+      btn.textContent = liked ? '♥' : '♡';
+      btn.setAttribute('aria-pressed', String(liked));
+      btn.setAttribute('aria-label', `${liked ? 'Unlike' : 'Like'} this post`);
+    }
   }
 
   private bindEvents(): void {
@@ -1044,7 +1409,7 @@ class NightCallApp {
         this.setScreen('calling');
         send('queue:join');
       }
-      if (action === 'close-confession-reveal') { this.pendingConfession = null; this.setScreen('postcall'); }
+      if (action === 'close-confession-reveal') { this.pendingConfession = null; this.setScreen('postcall-options'); }
       if (action === 'share-confession-to-wall') {
         if (this.pendingConfession?.answer) {
           void api.wall.post(this.pendingConfession.answer).then(() => {
@@ -1054,7 +1419,7 @@ class NightCallApp {
           });
         }
         this.pendingConfession = null;
-        this.setScreen('postcall');
+        this.setScreen('postcall-options');
       }
       if (action === 'report-call') this.showReportSheet();
       if (action === 'submit-report') void this.submitReport();
@@ -1079,6 +1444,15 @@ class NightCallApp {
       if (action === 'load-more-wall') void this.loadMoreWall();
       if (action === 'use-pass') this.usePass();
       if (action === 'upgrade') this.showToast('Premium coming soon — stay tuned 🌙');
+      if (action === 'retry-call') { this.setScreen('calling'); send('queue:join'); }
+      if (action === 'go-to-postcall') this.setScreen('postcall');
+      if (action === 'toggle-ambient') this.toggleAmbient();
+      if (action === 'enable-notif') { void this.requestPushPermission(); this.setScreen(this.resolveHomeScreen()); }
+      if (action === 'skip-notif') this.setScreen(this.resolveHomeScreen());
+      const postId = button.dataset.postId;
+      if (action === 'like-post' && postId) this.likePost(postId);
+      const filterVal = button.dataset.filter as 'all' | 'confessions' | 'words' | undefined;
+      if (filterVal) this.filterWall(filterVal);
       if (action === 'edit-timezone' || action === 'edit-alias') this.setScreen('onboarding-setup');
       if (action === 'toggle-notifications') void this.toggleNotifications();
       if (action === 'open-privacy') this.setScreen('privacy');
@@ -1132,20 +1506,27 @@ class NightCallApp {
       const { roomId, isInitiator, prompt } = payload as { roomId: string; isInitiator: boolean; prompt?: string };
       this.currentRoomId = roomId;
       if (prompt) this.currentPrompt = prompt;
-      this.setScreen('connecting');
-      void startRtcCall(roomId, isInitiator, {
-        onConnected: () => { /* audio established */ },
-        onEnded: () => { this.endCall(); },
-        onAudioLevel: () => { /* wave bars animate via CSS */ },
-      }).catch(() => {
-        if (this.connectingTimerId !== undefined) { window.clearTimeout(this.connectingTimerId); this.connectingTimerId = undefined; }
-        this.showToast('Could not connect — check microphone permissions');
-        this.setScreen(this.resolveHomeScreen());
-      });
-      this.connectingTimerId = window.setTimeout(() => {
-        this.connectingTimerId = undefined;
-        this.startCall();
-      }, 2500);
+
+      // Candle-out animation then show connecting screen
+      const candle = this.root.querySelector<SVGElement>('.candle-svg');
+      if (candle) candle.classList.add('candle-out');
+
+      window.setTimeout(() => {
+        this.setScreen('connecting');
+        void startRtcCall(roomId, isInitiator, {
+          onConnected: () => { /* audio established */ },
+          onEnded: () => { this.endCall(); },
+          onAudioLevel: () => { /* wave bars animate via CSS */ },
+        }).catch(() => {
+          if (this.connectingTimerId !== undefined) { window.clearTimeout(this.connectingTimerId); this.connectingTimerId = undefined; }
+          this.showToast('Could not connect — check microphone permissions');
+          this.setScreen(this.resolveHomeScreen());
+        });
+        this.connectingTimerId = window.setTimeout(() => {
+          this.connectingTimerId = undefined;
+          this.startCall();
+        }, 2500);
+      }, candle ? 400 : 0);
     });
 
     on('queue:limit_reached', () => {
@@ -1160,6 +1541,13 @@ class NightCallApp {
   }
 
   private setScreen(screen: ScreenId, options: { skipPersistence?: boolean } = {}): void {
+    const leaving = this.state.activeScreen;
+
+    // Stop waiting room when leaving calling screen
+    if (leaving === 'calling' && screen !== 'calling') {
+      this.stopWaitingRoom();
+    }
+
     this.refreshScreen(screen);
 
     this.state.activeScreen = screen;
@@ -1174,6 +1562,12 @@ class NightCallApp {
 
     if (screen !== 'incall') this.stopTimer();
     if (screen === 'incall') this.startTimer();
+
+    // Start waiting room after template is in DOM
+    if (screen === 'calling') {
+      window.requestAnimationFrame(() => this.startWaitingRoom());
+    }
+
     if (!options.skipPersistence) this.saveState();
     this.updateClockAndWindow();
 
@@ -1193,6 +1587,8 @@ class NightCallApp {
       wall: () => this.wallTemplate(),
       'confess-before-call': () => this.confessBeforeCallTemplate(),
       'confession-reveal': () => this.confessionRevealTemplate(),
+      'postcall-options': () => this.postCallOptionsTemplate(),
+      'no-match': () => this.noMatchTemplate(),
     };
     const template = refreshable[screen];
     if (!template) return;
@@ -1299,8 +1695,7 @@ class NightCallApp {
 
       connectSocket(token);
       this.bindSocketEvents();
-      void this.requestPushPermission();
-      this.setScreen(this.resolveHomeScreen());
+      this.setScreen('onboard-notif');
     } catch (err: unknown) {
       console.error('enterNightCall error:', err);
       const e = err as { status?: number; message?: string };
@@ -1398,6 +1793,16 @@ class NightCallApp {
     haptic([50, 30, 50]);
     this.setScreen('incall');
     this.updateTimerDisplay();
+    // Rotate hint every 3 minutes
+    this.hintTimerId = window.setInterval(() => this.rotateCallHint(), 180_000);
+  }
+
+  private rotateCallHint(): void {
+    const hintEl = this.root.querySelector<HTMLElement>('[data-call-hint]');
+    if (!hintEl) return;
+    const current = hintEl.textContent ?? '';
+    const next = CALL_HINTS.filter((h) => h !== current);
+    hintEl.textContent = next[Math.floor(Math.random() * next.length)] ?? CALL_HINTS[0];
   }
 
   // 4d — cleanup WebRTC and local state, navigate to postcall or confession-reveal
@@ -1426,10 +1831,25 @@ class NightCallApp {
     this.isMuted = false;
     this.saveState();
     this.updateStats();
-    if (this.pendingConfession) {
-      this.setScreen('confession-reveal');
+
+    // Brief hard-cut to black before post-call screen
+    const phone = this.root.querySelector<HTMLElement>('[data-phone]');
+    if (phone) {
+      phone.classList.add('hard-cut');
+      window.setTimeout(() => {
+        phone.classList.remove('hard-cut');
+        if (this.pendingConfession) {
+          this.setScreen('confession-reveal');
+        } else {
+          this.setScreen('postcall-options');
+        }
+      }, 350);
     } else {
-      this.setScreen('postcall');
+      if (this.pendingConfession) {
+        this.setScreen('confession-reveal');
+      } else {
+        this.setScreen('postcall-options');
+      }
     }
   }
 
@@ -1442,6 +1862,9 @@ class NightCallApp {
       btn.textContent = this.isMuted ? 'Unmute' : 'Mute';
       btn.setAttribute('aria-pressed', String(this.isMuted));
     }
+    const banner = this.root.querySelector<HTMLElement>('[data-mute-banner]');
+    if (banner) banner.classList.toggle('visible', this.isMuted);
+    haptic(this.isMuted ? [20] : [10]);
   }
 
   private startTimer(): void {
@@ -1454,9 +1877,8 @@ class NightCallApp {
   }
 
   private stopTimer(): void {
-    if (this.timerId === undefined) return;
-    window.clearInterval(this.timerId);
-    this.timerId = undefined;
+    if (this.timerId !== undefined) { window.clearInterval(this.timerId); this.timerId = undefined; }
+    if (this.hintTimerId !== undefined) { window.clearInterval(this.hintTimerId); this.hintTimerId = undefined; }
   }
 
   private updateTimerDisplay(): void {
