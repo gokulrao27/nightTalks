@@ -9,6 +9,7 @@ export interface CallCallbacks {
 
 let pc: RTCPeerConnection | null = null;
 let localStream: MediaStream | null = null;
+let remoteAudio: HTMLAudioElement | null = null;
 let audioCtx: AudioContext | null = null;
 let levelTimer: number | undefined;
 
@@ -41,9 +42,9 @@ export async function startCall(roomId: string, isInitiator: boolean, callbacks:
   }, 100);
 
   pc.ontrack = (event) => {
-    const audio = new Audio();
-    audio.srcObject = event.streams[0];
-    void audio.play();
+    remoteAudio = new Audio();
+    remoteAudio.srcObject = event.streams[0];
+    void remoteAudio.play();
     callbacks.onConnected();
   };
 
@@ -66,7 +67,7 @@ export async function startCall(roomId: string, isInitiator: boolean, callbacks:
 
   const unsubIce = on('ice', async (payload) => {
     const { candidate } = payload as { candidate: RTCIceCandidateInit };
-    await pc!.addIceCandidate(new RTCIceCandidate(candidate));
+    await pc!.addIceCandidate(new RTCIceCandidate(candidate)).catch(() => {});
   });
 
   const unsubEnded = on('call:ended', (payload) => {
@@ -90,6 +91,7 @@ export function endCall(): void {
   localStream?.getTracks().forEach((t) => t.stop());
   pc?.close();
   if (audioCtx) void audioCtx.close();
+  if (remoteAudio) { remoteAudio.srcObject = null; remoteAudio = null; }
 
   pc = null;
   localStream = null;
