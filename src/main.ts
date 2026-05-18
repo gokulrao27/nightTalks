@@ -2178,15 +2178,23 @@ if (window.location.hash === '#debug') {
       results.backendPing = ping.ok ? await ping.json() as unknown : `HTTP ${ping.status}`;
     } catch (e) { results.backendPing = String(e); }
     try {
-      const ice = await fetch(`${apiUrl}/call/ice-config`);
-      if (ice.ok) {
-        const servers = await ice.json() as unknown[];
-        results.iceConfig = `${servers.length} servers`;
-        results.iceServers = servers;
-      } else {
-        results.iceConfig = `HTTP ${ice.status}`;
-      }
+      const token = localStorage.getItem('nc:token');
+      const ice = await fetch(`${apiUrl}/call/ice-config`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      results.iceConfig = ice.ok
+        ? `${(await ice.json() as unknown[]).length} servers ✅`
+        : `HTTP ${ice.status} — ${ice.status === 401 ? 'no token' : 'error'}`;
     } catch (e) { results.iceConfig = String(e); }
+    results.wsTest = await new Promise((resolve) => {
+      const token = localStorage.getItem('nc:token');
+      if (!token) { resolve('no token'); return; }
+      const ws = new WebSocket(`${import.meta.env.VITE_WS_URL as string}?token=${encodeURIComponent(token)}`);
+      const t = setTimeout(() => { ws.close(); resolve('timeout after 5s'); }, 5000);
+      ws.onopen  = () => { clearTimeout(t); ws.close(); resolve('connected ✅'); };
+      ws.onerror = () => { clearTimeout(t); resolve('failed ❌'); };
+      ws.onclose = (e) => { if (e.code === 4001) { clearTimeout(t); resolve('JWT rejected — token expired ❌'); } };
+    });
     console.table(results);
     alert(JSON.stringify(results, null, 2));
   })();
