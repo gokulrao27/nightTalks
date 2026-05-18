@@ -612,12 +612,18 @@ class NightCallApp {
     `;
   }
 
+  private canPostConfession(): boolean {
+    const last = localStorage.getItem('nc:lastConfession');
+    if (!last) return true;
+    return new Date(last).toDateString() !== new Date().toDateString();
+  }
+
   private wallTemplate(): string {
     const posts = this.apiWallPosts.length > 0
       ? this.apiWallPosts.map(({ body, country_vague, created_at }) => `
           <article class="wall-item">
             <p class="wall-quote">"${this.escapeHtml(body)}"</p>
-            <div class="wall-meta"><span class="wall-dot" aria-hidden="true"></span>From somewhere in ${this.escapeHtml(country_vague ?? 'the world')} <span class="wall-dot" aria-hidden="true"></span> ${this.relativeTime(created_at)}</div>
+            <div class="wall-meta"><span class="wall-dot" aria-hidden="true"></span>From ${this.escapeHtml(country_vague ?? 'somewhere in the world')} <span class="wall-dot" aria-hidden="true"></span> ${this.relativeTime(created_at)}</div>
           </article>
         `).join('')
       : WALL_POSTS.map(({ quote, region, age }) => `
@@ -631,12 +637,23 @@ class NightCallApp {
       ? `<button class="wall-btn" data-action="load-more-wall" type="button">Load more</button>`
       : '';
 
+    const hasToken = !!getToken();
+    const canPost = hasToken && this.canPostConfession();
+    const confessionBtn = hasToken
+      ? `<button class="wall-btn${canPost ? '' : ' wall-btn--muted'}" data-action="add-confession" type="button"${canPost ? '' : ' disabled'}>
+           ${canPost ? '+ Add your confession' : 'Confession posted tonight ✓'}
+         </button>`
+      : `<button class="wall-btn wall-btn--muted" data-action="add-confession" type="button">
+           + Add your confession
+         </button>`;
+
     return `
       <section class="screen" data-screen="wall" aria-labelledby="wall-title">
         ${this.statusBarTemplate()}
         <div class="wall-head">
           <h2 class="wall-title" id="wall-title" data-autofocus tabindex="-1">The Wall</h2>
           <p class="wall-subtitle">Things people wish they'd said. Anonymous. Forever.</p>
+          ${confessionBtn}
         </div>
         <div class="scroll">${posts}${loadMore}</div>
         ${this.bottomNavTemplate('wall')}
@@ -838,6 +855,7 @@ class NightCallApp {
       if (action === 'toggle-mute') this.handleToggleMute();
       if (action === 'save-word') void this.saveWord();
       if (action === 'open-wall') void this.handleWallPost();
+      if (action === 'add-confession') void this.handleConfession();
       if (action === 'load-more-wall') void this.loadMoreWall();
       if (action === 'use-pass') this.usePass();
       if (action === 'upgrade') this.showToast('Premium coming soon — stay tuned 🌙');
@@ -974,7 +992,10 @@ class NightCallApp {
         this.setScreen(this.state.onboarding.completed ? this.resolveHomeScreen() : 'onboarding-welcome');
       }
     } else {
-      this.setScreen(this.state.onboarding.completed ? this.resolveHomeScreen() : 'onboarding-welcome');
+      // No token — always require fresh auth; never bypass to home screen
+      this.state.onboarding.completed = false;
+      this.saveState();
+      this.setScreen('onboarding-welcome');
     }
   }
 
@@ -1023,9 +1044,9 @@ class NightCallApp {
         pseudonym: this.state.onboarding.alias || 'Anonymous',
         avatar: this.state.onboarding.avatar,
         timezone: this.state.onboarding.timezone,
-        consent_age: this.state.onboarding.confirmations.age,
-        consent_anon: this.state.onboarding.confirmations.privacy,
-        consent_terms: this.state.onboarding.confirmations.terms,
+        consentAge: this.state.onboarding.confirmations.age,
+        consentAnon: this.state.onboarding.confirmations.privacy,
+        consentTerms: this.state.onboarding.confirmations.terms,
       });
 
       localStorage.setItem('nc:token', token);
@@ -1041,8 +1062,15 @@ class NightCallApp {
       this.bindSocketEvents();
       void this.requestPushPermission();
       this.setScreen(this.resolveHomeScreen());
-    } catch {
-      this.showToast('Something went wrong — try again');
+    } catch (err: unknown) {
+      const e = err as { status?: number; message?: string };
+      if (e.status === 429) {
+        this.showToast('Too many attempts — wait a moment');
+      } else if (!navigator.onLine) {
+        this.showToast('No internet — check your connection');
+      } else {
+        this.showToast('Could not connect to server — try again');
+      }
     }
   }
 
@@ -1238,6 +1266,44 @@ class NightCallApp {
       void this.loadWall();
     } catch {
       this.showToast('Could not post — try again');
+    }
+  }
+
+  private async handleConfession(): Promise<void> {
+    if (!getToken()) {
+      this.showToast('Complete onboarding first to confess 🌙');
+      return;
+    }
+    if (!this.canPostConfession()) {
+      this.showToast('One confession per night — come back tomorrow 🌙');
+      return;
+    }
+    const body = window.prompt('Your confession (10–500 characters):\n\nPosted anonymously on The Wall.');
+    if (!body?.trim()) return;
+    const trimmed = body.trim();
+    if (trimmed.length < 10) {
+      this.showToast('Too short — say a little more');
+      return;
+    }
+    if (trimmed.length > 500) {
+      this.showToast('Too long — keep it under 500 characters');
+      return;
+    }
+    try {
+      await api.wall.post(trimmed);
+      localStorage.setItem('nc:lastConfession', new Date().toISOString());
+      this.showToast('Confession posted to The Wall 🌙');
+      void this.loadWall();
+    } catch (err: unknown) {
+      const e = err as { status?: number; message?: string };
+      if (e.status === 429) {
+        localStorage.setItem('nc:lastConfession', new Date().toISOString());
+        this.showToast('One confession per night — come back tomorrow 🌙');
+      } else if (e.status === 422) {
+        this.showToast('That content can\'t be posted — try rewording it');
+      } else {
+        this.showToast('Could not post — try again');
+      }
     }
   }
 

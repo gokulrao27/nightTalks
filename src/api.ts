@@ -35,9 +35,9 @@ export const api = {
       pseudonym: string;
       avatar: string;
       timezone: string;
-      consent_age: boolean;
-      consent_anon: boolean;
-      consent_terms: boolean;
+      consentAge: boolean;
+      consentAnon: boolean;
+      consentTerms: boolean;
     }): Promise<{ token: string; user: User }> {
       return request('POST', '/auth/init', payload);
     },
